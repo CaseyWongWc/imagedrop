@@ -6,7 +6,7 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "./objectStorage";
-import { insertImageSchema, type Image } from "@shared/schema";
+import { insertImageSchema, insertTranscriptionSchema, type Image } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const objectStorageService = new ObjectStorageService();
@@ -102,7 +102,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Delete all images
+  // Delete all images and transcriptions
   app.delete("/api/images", async (req, res) => {
     try {
       // Get all images first to delete from cloud storage
@@ -121,12 +121,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Delete all metadata
+      // Delete all metadata (images and transcriptions)
       await storage.deleteAllImages();
+      await storage.deleteAllTranscriptions();
       res.json({ success: true, deletedCount: images.length });
     } catch (error) {
       console.error("Error deleting all images:", error);
       res.status(500).json({ error: "Failed to delete all images" });
+    }
+  });
+
+  // Create transcription record
+  app.post("/api/transcriptions", async (req, res) => {
+    try {
+      const validatedData = insertTranscriptionSchema.parse(req.body);
+      const transcription = await storage.createTranscription(validatedData);
+      res.json(transcription);
+    } catch (error) {
+      console.error("Error creating transcription:", error);
+      res.status(400).json({ error: "Invalid transcription data" });
+    }
+  });
+
+  // Get all transcriptions
+  app.get("/api/transcriptions", async (req, res) => {
+    try {
+      const transcriptions = await storage.getAllTranscriptions();
+      res.json(transcriptions);
+    } catch (error) {
+      console.error("Error fetching transcriptions:", error);
+      res.status(500).json({ error: "Failed to fetch transcriptions" });
+    }
+  });
+
+  // Delete transcription
+  app.delete("/api/transcriptions/:id", async (req, res) => {
+    try {
+      await storage.deleteTranscription(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting transcription:", error);
+      res.status(500).json({ error: "Failed to delete transcription" });
+    }
+  });
+
+  // Delete all transcriptions
+  app.delete("/api/transcriptions", async (req, res) => {
+    try {
+      await storage.deleteAllTranscriptions();
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting all transcriptions:", error);
+      res.status(500).json({ error: "Failed to delete all transcriptions" });
     }
   });
 
