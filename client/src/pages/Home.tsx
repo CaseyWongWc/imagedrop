@@ -205,7 +205,10 @@ export default function Home() {
       
       // Check if any timestamp text from images is being copied
       if (selectedText && selectedText.includes('image.png')) {
-        startDeleteCountdown();
+        // Add a small delay to ensure clipboard operation completes
+        setTimeout(() => {
+          startDeleteCountdown();
+        }, 200);
       }
     };
 
