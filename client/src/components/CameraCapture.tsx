@@ -206,20 +206,32 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
             </div>
           </div>
           <div className="relative w-full bg-muted rounded-lg overflow-hidden aspect-video md:aspect-video">
-            {!captured ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                className="w-full h-full object-cover"
-                data-testid="video-camera"
-              />
-            ) : (
-              <img
-                src={captured}
-                alt="Captured"
-                className="w-full h-full object-cover"
-                data-testid="img-preview"
+            <div 
+              className={`w-full h-full ${orientation === "landscape" ? "rotate-90 scale-[1.78]" : ""} transition-transform duration-300`}
+            >
+              {!captured ? (
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-cover"
+                  data-testid="video-camera"
+                />
+              ) : (
+                <img
+                  src={captured}
+                  alt="Captured"
+                  className="w-full h-full object-cover"
+                  data-testid="img-preview"
+                />
+              )}
+            </div>
+            
+            {/* Red line indicator at the bottom when in landscape mode */}
+            {orientation === "landscape" && (
+              <div 
+                className="absolute left-0 right-0 bottom-0 h-1 bg-red-500 z-10"
+                data-testid="orientation-indicator"
               />
             )}
           </div>
