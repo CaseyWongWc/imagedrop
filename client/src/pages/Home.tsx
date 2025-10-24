@@ -71,16 +71,17 @@ export default function Home() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/images"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transcriptions"] });
       setDeleteAllDialogOpen(false);
       toast({
-        title: "All images deleted",
-        description: "Your gallery has been cleared",
+        title: "All content deleted",
+        description: "Your gallery and transcriptions have been cleared",
       });
     },
     onError: () => {
       toast({
         title: "Delete failed",
-        description: "Could not delete all images. Please try again.",
+        description: "Could not delete content. Please try again.",
         variant: "destructive",
       });
     },
