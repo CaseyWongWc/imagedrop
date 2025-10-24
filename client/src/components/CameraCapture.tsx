@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Camera, X, RefreshCw } from "lucide-react";
@@ -17,42 +17,49 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
   const { toast } = useToast();
 
-  const startCamera = useCallback(async (mode: "user" | "environment") => {
-    try {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
+  useEffect(() => {
+    let currentStream: MediaStream | null = null;
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: mode },
-        audio: false,
-      });
+    const startCamera = async () => {
+      if (!open || captured) return;
 
-      setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
+      try {
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode },
+          audio: false,
+        });
+
+        currentStream = mediaStream;
+        setStream(mediaStream);
+        if (videoRef.current) {
+          videoRef.current.srcObject = mediaStream;
+        }
+      } catch (error) {
+        toast({
+          title: "Camera Error",
+          description: "Unable to access camera. Please check permissions.",
+          variant: "destructive",
+        });
       }
-    } catch (error) {
-      toast({
-        title: "Camera Error",
-        description: "Unable to access camera. Please check permissions.",
-        variant: "destructive",
-      });
+    };
+
+    startCamera();
+    
+    return () => {
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [open, facingMode, captured, toast]);
+
+  const handleClose = () => {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
     }
-  }, [stream, toast]);
-
-  const handleOpen = useCallback((isOpen: boolean) => {
-    if (isOpen) {
-      startCamera(facingMode);
-    } else {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        setStream(null);
-      }
-      setCaptured(null);
-      onClose();
-    }
-  }, [stream, facingMode, startCamera, onClose]);
+    setCaptured(null);
+    onClose();
+  };
 
   const capturePhoto = () => {
     if (!videoRef.current) return;
@@ -77,7 +84,7 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
       .then(blob => {
         const file = new File([blob], `camera-${Date.now()}.png`, { type: "image/png" });
         onCapture(file);
-        handleOpen(false);
+        handleClose();
       });
   };
 
@@ -86,13 +93,16 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
   };
 
   const switchCamera = () => {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+    }
     const newMode = facingMode === "user" ? "environment" : "user";
     setFacingMode(newMode);
-    startCamera(newMode);
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpen}>
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && handleClose()}>
       <DialogContent className="max-w-2xl" data-testid="dialog-camera">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -126,7 +136,7 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
               <>
                 <Button
                   variant="outline"
-                  onClick={() => handleOpen(false)}
+                  onClick={handleClose}
                   data-testid="button-cancel"
                 >
                   Cancel

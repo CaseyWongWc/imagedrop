@@ -96,10 +96,15 @@ export function ImageGallery({ images, onDelete }: ImageGalleryProps) {
               )}
             </div>
 
-            {/* Image info */}
-            <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-2 text-white text-xs font-mono opacity-0 group-hover:opacity-100 transition-opacity">
-              <div className="truncate">{image.fileName}</div>
-              <div className="text-white/70">{image.fileSize}</div>
+            {/* Image info - always visible */}
+            <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-2 text-white text-xs">
+              <div className="truncate font-medium">{image.fileName}</div>
+              <div className="flex justify-between items-center text-white/70 mt-1">
+                <span>{image.fileSize}</span>
+                <span>
+                  {new Date(image.uploadedAt).toLocaleDateString()} {new Date(image.uploadedAt).toLocaleTimeString()}
+                </span>
+              </div>
             </div>
           </Card>
         ))}

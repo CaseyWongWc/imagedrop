@@ -13,9 +13,11 @@ export default function Home() {
   const [isUploading, setIsUploading] = useState(false);
   const { toast } = useToast();
 
-  const { data: images = [], isLoading } = useQuery<Image[]>({
+  const { data: imagesData = [], isLoading } = useQuery<Image[]>({
     queryKey: ["/api/images"],
   });
+
+  const images = [...imagesData].reverse();
 
   const uploadMutation = useMutation({
     mutationFn: async (imageData: InsertImage) => {
