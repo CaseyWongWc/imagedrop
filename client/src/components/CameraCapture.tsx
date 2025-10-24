@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Camera, X, RefreshCw, Zap } from "lucide-react";
+import { Camera, X, RefreshCw, Zap, RotateCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface CameraCaptureProps {
@@ -17,8 +17,27 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [captured, setCaptured] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
-  const [continuousMode, setContinuousMode] = useState(false);
+  const [continuousMode, setContinuousMode] = useState(() => {
+    // Load saved preference from localStorage
+    const saved = localStorage.getItem("camera-continuous-mode");
+    return saved === "true";
+  });
+  const [orientation, setOrientation] = useState<"portrait" | "landscape">(() => {
+    // Load saved preference from localStorage
+    const saved = localStorage.getItem("camera-orientation");
+    return (saved === "landscape" ? "landscape" : "portrait") as "portrait" | "landscape";
+  });
   const { toast } = useToast();
+
+  // Save orientation preference to localStorage
+  useEffect(() => {
+    localStorage.setItem("camera-orientation", orientation);
+  }, [orientation]);
+
+  // Save continuous mode preference to localStorage
+  useEffect(() => {
+    localStorage.setItem("camera-continuous-mode", continuousMode.toString());
+  }, [continuousMode]);
 
   useEffect(() => {
     let currentStream: MediaStream | null = null;
@@ -67,14 +86,31 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
   const capturePhoto = async () => {
     if (!videoRef.current) return;
 
+    const video = videoRef.current;
     const canvas = document.createElement("canvas");
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    const ctx = canvas.getContext("2d");
     
+    // Apply rotation based on orientation preference
+    if (orientation === "landscape") {
+      // Rotate 90 degrees clockwise for landscape
+      canvas.width = video.videoHeight;
+      canvas.height = video.videoWidth;
+    } else {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
     
-    ctx.drawImage(videoRef.current, 0, 0);
+    if (orientation === "landscape") {
+      // Rotate the canvas context 90 degrees clockwise
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(video, -video.videoWidth / 2, -video.videoHeight / 2);
+    } else {
+      ctx.drawImage(video, 0, 0);
+    }
+    
     const dataUrl = canvas.toDataURL("image/png");
     
     if (continuousMode) {
@@ -137,20 +173,37 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Continuous Mode Toggle */}
-          <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-            <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-muted-foreground" />
-              <Label htmlFor="continuous-mode" className="cursor-pointer">
-                Continuous Capture
-              </Label>
+          {/* Camera Settings */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-muted-foreground" />
+                <Label htmlFor="continuous-mode" className="cursor-pointer">
+                  Continuous Capture
+                </Label>
+              </div>
+              <Switch
+                id="continuous-mode"
+                checked={continuousMode}
+                onCheckedChange={setContinuousMode}
+                data-testid="switch-continuous-mode"
+              />
             </div>
-            <Switch
-              id="continuous-mode"
-              checked={continuousMode}
-              onCheckedChange={setContinuousMode}
-              data-testid="switch-continuous-mode"
-            />
+            
+            <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+              <div className="flex items-center gap-2">
+                <RotateCw className="w-4 h-4 text-muted-foreground" />
+                <Label htmlFor="orientation-mode" className="cursor-pointer">
+                  Sideways (Landscape)
+                </Label>
+              </div>
+              <Switch
+                id="orientation-mode"
+                checked={orientation === "landscape"}
+                onCheckedChange={(checked) => setOrientation(checked ? "landscape" : "portrait")}
+                data-testid="switch-orientation"
+              />
+            </div>
           </div>
           <div className="relative w-full bg-muted rounded-lg overflow-hidden aspect-video md:aspect-video">
             {!captured ? (

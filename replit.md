@@ -50,6 +50,8 @@ Preferred communication style: Simple, everyday language.
 - Continuous capture mode: toggle for rapid-fire photo taking without preview interruptions
 - Auto-upload each photo while maintaining camera stream
 - Flip camera button for switching between back and front cameras
+- Orientation toggle: "Sideways (Landscape)" mode rotates captured photos 90° clockwise for sideways phone holding
+- Per-device localStorage: Both continuous mode and orientation preferences are saved per device
 
 ### Backend Architecture
 
