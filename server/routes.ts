@@ -7,9 +7,12 @@ import {
   ObjectNotFoundError,
 } from "./objectStorage";
 import { insertImageSchema, insertTranscriptionSchema, type Image } from "@shared/schema";
+import { TranscriptionService } from "./transcription";
+import { randomUUID } from "crypto";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const objectStorageService = new ObjectStorageService();
+  const transcriptionService = new TranscriptionService();
 
   // Serve uploaded objects (public access for this use case)
   app.get("/objects/:objectPath(*)", async (req, res) => {
@@ -173,6 +176,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error deleting all transcriptions:", error);
       res.status(500).json({ error: "Failed to delete all transcriptions" });
+    }
+  });
+
+  // Transcribe audio
+  app.post("/api/transcribe", async (req, res) => {
+    let tempFilePath: string | null = null;
+    
+    try {
+      if (!req.body.audio) {
+        return res.status(400).json({ error: "No audio data provided" });
+      }
+
+      // Convert base64 audio to buffer
+      const audioBuffer = Buffer.from(req.body.audio, "base64");
+      const filename = `audio-${Date.now()}.webm`;
+      
+      // Save audio temporarily
+      tempFilePath = await transcriptionService.saveAudioBuffer(audioBuffer, filename);
+      
+      // Transcribe audio
+      const result = await transcriptionService.transcribeAudio(tempFilePath);
+      
+      // Create transcription record
+      const transcription = await storage.createTranscription({
+        id: randomUUID(),
+        text: result.text,
+      });
+      
+      res.json(transcription);
+    } catch (error) {
+      console.error("Error transcribing audio:", error);
+      res.status(500).json({ error: "Failed to transcribe audio" });
+    } finally {
+      // Cleanup temp file
+      if (tempFilePath) {
+        await transcriptionService.cleanup(tempFilePath);
+      }
     }
   });
 

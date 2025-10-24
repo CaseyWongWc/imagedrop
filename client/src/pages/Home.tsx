@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Image, InsertImage } from "@shared/schema";
+import type { Image, InsertImage, Transcription } from "@shared/schema";
 import { UploadZone } from "@/components/UploadZone";
 import { CameraCapture } from "@/components/CameraCapture";
+import { AudioRecorder } from "@/components/AudioRecorder";
 import { ImageGallery } from "@/components/ImageGallery";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
@@ -22,6 +23,7 @@ import {
 
 export default function Home() {
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [recorderOpen, setRecorderOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null);
@@ -33,7 +35,13 @@ export default function Home() {
     refetchInterval: 3000, // Auto-refresh every 3 seconds
   });
 
+  const { data: transcriptionsData = [], isLoading: isLoadingTranscriptions } = useQuery<Transcription[]>({
+    queryKey: ["/api/transcriptions"],
+    refetchInterval: 3000, // Auto-refresh every 3 seconds
+  });
+
   const images = [...imagesData].reverse();
+  const transcriptions = transcriptionsData;
 
   const uploadMutation = useMutation({
     mutationFn: async (imageData: InsertImage) => {
@@ -143,24 +151,42 @@ export default function Home() {
     
     // Find all timestamp elements in the gallery
     const galleryElement = document.querySelector('[data-testid^="card-image-"]');
-    if (!galleryElement) return;
+    const transcriptionsList = document.querySelector('[data-testid="transcriptions-list"]');
     
-    const parentGrid = galleryElement.parentElement;
-    if (!parentGrid) return;
+    if (!galleryElement && !transcriptionsList) return;
     
-    // Select from the first to the last card
-    const firstCard = parentGrid.firstElementChild;
-    const lastCard = parentGrid.lastElementChild;
+    // Find first and last elements to select
+    let firstElement: Element | null = null;
+    let lastElement: Element | null = null;
     
-    if (firstCard && lastCard) {
-      range.setStartBefore(firstCard);
-      range.setEndAfter(lastCard);
+    if (galleryElement) {
+      const parentGrid = galleryElement.parentElement;
+      firstElement = parentGrid?.firstElementChild || null;
+      lastElement = parentGrid?.lastElementChild || null;
+    }
+    
+    // If transcriptions exist, select up to the last transcription
+    if (transcriptionsList) {
+      const lastTranscription = transcriptionsList.lastElementChild;
+      if (lastTranscription) {
+        lastElement = lastTranscription;
+        if (!firstElement && galleryElement) {
+          firstElement = galleryElement.parentElement?.firstElementChild || null;
+        } else if (!firstElement) {
+          firstElement = transcriptionsList.firstElementChild;
+        }
+      }
+    }
+    
+    if (firstElement && lastElement) {
+      range.setStartBefore(firstElement);
+      range.setEndAfter(lastElement);
       selection?.removeAllRanges();
       selection?.addRange(range);
       
       toast({
         title: "Text selected",
-        description: "Press Ctrl+C to copy, then images will auto-delete",
+        description: "Press Ctrl+C to copy, then auto-delete starts",
       });
     }
   };
@@ -279,6 +305,7 @@ export default function Home() {
         <UploadZone
           onFileSelect={handleFileUpload}
           onOpenCamera={() => setCameraOpen(true)}
+          onOpenRecorder={() => setRecorderOpen(true)}
           isUploading={isUploading}
         />
 
@@ -313,6 +340,34 @@ export default function Home() {
             onDelete={(id) => deleteMutation.mutate(id)}
           />
         )}
+
+        {/* Transcriptions */}
+        {transcriptions.length > 0 && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <Separator className="flex-1" />
+              <span className="text-sm text-muted-foreground font-medium">
+                Transcriptions
+              </span>
+              <Separator className="flex-1" />
+            </div>
+            
+            <div className="space-y-2" data-testid="transcriptions-list">
+              {transcriptions.map((transcription) => (
+                <div 
+                  key={transcription.id}
+                  className="p-4 bg-muted/30 rounded-lg border"
+                  data-testid={`transcription-${transcription.id}`}
+                >
+                  <p className="text-sm">{transcription.text}</p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {new Date(transcription.createdAt).toLocaleDateString()} {new Date(transcription.createdAt).toLocaleTimeString()}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </main>
 
       {/* Camera Modal */}
@@ -320,6 +375,13 @@ export default function Home() {
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
         onCapture={(file) => handleFileUpload([file])}
+      />
+
+      {/* Audio Recorder Modal */}
+      <AudioRecorder
+        open={recorderOpen}
+        onClose={() => setRecorderOpen(false)}
+        onTranscribed={() => queryClient.invalidateQueries({ queryKey: ["/api/transcriptions"] })}
       />
 
       {/* Delete All Confirmation Dialog */}
