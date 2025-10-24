@@ -39,8 +39,19 @@ export default function Home() {
     refetchInterval: 3000, // Auto-refresh every 3 seconds
   });
 
-  const images = [...imagesData].reverse();
-  const transcriptions = transcriptionsData;
+  // Merge images and transcriptions into a chronological timeline
+  type TimelineItem = 
+    | { type: 'image'; data: Image }
+    | { type: 'transcription'; data: Transcription };
+
+  const timeline: TimelineItem[] = [
+    ...imagesData.map(img => ({ type: 'image' as const, data: img })),
+    ...transcriptionsData.map(trans => ({ type: 'transcription' as const, data: trans }))
+  ].sort((a, b) => {
+    const timeA = new Date(a.data.uploadedAt || a.data.createdAt).getTime();
+    const timeB = new Date(b.data.uploadedAt || b.data.createdAt).getTime();
+    return timeA - timeB; // oldest first
+  });
 
   const uploadMutation = useMutation({
     mutationFn: async (imageData: InsertImage) => {
@@ -149,34 +160,13 @@ export default function Home() {
     const selection = window.getSelection();
     const range = document.createRange();
     
-    // Find all timestamp elements in the gallery
-    const galleryElement = document.querySelector('[data-testid^="card-image-"]');
-    const transcriptionsList = document.querySelector('[data-testid="transcriptions-list"]');
+    // Find the timeline container
+    const timelineContainer = document.querySelector('[data-testid="timeline-container"]');
     
-    if (!galleryElement && !transcriptionsList) return;
+    if (!timelineContainer) return;
     
-    // Find first and last elements to select
-    let firstElement: Element | null = null;
-    let lastElement: Element | null = null;
-    
-    if (galleryElement) {
-      const parentGrid = galleryElement.parentElement;
-      firstElement = parentGrid?.firstElementChild || null;
-      lastElement = parentGrid?.lastElementChild || null;
-    }
-    
-    // If transcriptions exist, select up to the last transcription
-    if (transcriptionsList) {
-      const lastTranscription = transcriptionsList.lastElementChild;
-      if (lastTranscription) {
-        lastElement = lastTranscription;
-        if (!firstElement && galleryElement) {
-          firstElement = galleryElement.parentElement?.firstElementChild || null;
-        } else if (!firstElement) {
-          firstElement = transcriptionsList.firstElementChild;
-        }
-      }
-    }
+    const firstElement = timelineContainer.firstElementChild;
+    const lastElement = timelineContainer.lastElementChild;
     
     if (firstElement && lastElement) {
       range.setStartBefore(firstElement);
@@ -267,9 +257,9 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             <div className="text-sm text-muted-foreground" data-testid="text-image-count">
-              {images.length} {images.length === 1 ? "image" : "images"}
+              {timeline.length} {timeline.length === 1 ? "item" : "items"}
             </div>
-            {images.length > 0 && (
+            {timeline.length > 0 && (
               <Button
                 variant={deleteCountdown !== null ? "outline" : "destructive"}
                 size="sm"
@@ -309,11 +299,11 @@ export default function Home() {
         />
 
         {/* Separator */}
-        {images.length > 0 && (
+        {timeline.length > 0 && (
           <div className="flex items-center gap-4">
             <Separator className="flex-1" />
             <span className="text-sm text-muted-foreground font-medium">
-              Your Images
+              Timeline
             </span>
             <Button
               variant="outline"
@@ -328,43 +318,72 @@ export default function Home() {
           </div>
         )}
 
-        {/* Gallery */}
-        {isLoading ? (
+        {/* Timeline */}
+        {isLoading || isLoadingTranscriptions ? (
           <div className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" data-testid="loading-spinner" />
           </div>
         ) : (
-          <ImageGallery
-            images={images}
-            onDelete={(id) => deleteMutation.mutate(id)}
-          />
-        )}
-
-        {/* Transcriptions */}
-        {transcriptions.length > 0 && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-4">
-              <Separator className="flex-1" />
-              <span className="text-sm text-muted-foreground font-medium">
-                Transcriptions
-              </span>
-              <Separator className="flex-1" />
-            </div>
-            
-            <div className="space-y-2" data-testid="transcriptions-list">
-              {transcriptions.map((transcription) => (
-                <div 
-                  key={transcription.id}
-                  className="p-4 bg-muted/30 rounded-lg border"
-                  data-testid={`transcription-${transcription.id}`}
-                >
-                  <p className="text-sm">{transcription.text}</p>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    {new Date(transcription.createdAt).toLocaleDateString()} {new Date(transcription.createdAt).toLocaleTimeString()}
-                  </p>
-                </div>
-              ))}
-            </div>
+          <div className="space-y-4" data-testid="timeline-container">
+            {timeline.map((item) => {
+              if (item.type === 'image') {
+                return (
+                  <div 
+                    key={`image-${item.data.id}`}
+                    className="bg-card rounded-lg border overflow-hidden hover-elevate"
+                    data-testid={`card-image-${item.data.id}`}
+                  >
+                    <img
+                      src={item.data.objectPath}
+                      alt={item.data.fileName}
+                      className="w-full h-auto"
+                      loading="lazy"
+                    />
+                    <div className="p-4 space-y-2">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{item.data.fileName}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {new Date(item.data.uploadedAt).toLocaleDateString()} {new Date(item.data.uploadedAt).toLocaleTimeString()}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => deleteMutation.mutate(item.data.id)}
+                          data-testid={`button-delete-${item.data.id}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={`${window.location.origin}${item.data.objectPath}`}
+                          className="flex-1 text-xs bg-muted px-2 py-1 rounded font-mono"
+                          onClick={(e) => e.currentTarget.select()}
+                          data-testid={`input-url-${item.data.id}`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              } else {
+                return (
+                  <div 
+                    key={`transcription-${item.data.id}`}
+                    className="p-4 bg-muted/30 rounded-lg border"
+                    data-testid={`transcription-${item.data.id}`}
+                  >
+                    <p className="text-sm whitespace-pre-wrap">{item.data.text}</p>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      {new Date(item.data.createdAt).toLocaleDateString()} {new Date(item.data.createdAt).toLocaleTimeString()}
+                    </p>
+                  </div>
+                );
+              }
+            })}
           </div>
         )}
       </main>
@@ -385,9 +404,9 @@ export default function Home() {
       <AlertDialog open={deleteAllDialogOpen} onOpenChange={setDeleteAllDialogOpen}>
         <AlertDialogContent data-testid="dialog-delete-all">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete all images?</AlertDialogTitle>
+            <AlertDialogTitle>Delete everything?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete all {images.length} {images.length === 1 ? "image" : "images"} from your gallery.
+              This will permanently delete all {timeline.length} {timeline.length === 1 ? "item" : "items"} (images and transcriptions) from your timeline.
               This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
