@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Image, InsertImage } from "@shared/schema";
@@ -8,7 +8,7 @@ import { ImageGallery } from "@/components/ImageGallery";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { Trash2 } from "lucide-react";
+import { Trash2, FileText, Loader2 } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,6 +24,9 @@ export default function Home() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
+  const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null);
+  const timestampsRef = useRef<HTMLDivElement>(null);
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
 
   const { data: imagesData = [], isLoading } = useQuery<Image[]>({
@@ -135,6 +138,78 @@ export default function Home() {
     return (bytes / (1024 * 1024)).toFixed(1) + " MB";
   };
 
+  const handleSelectAllTimestamps = () => {
+    if (timestampsRef.current) {
+      const range = document.createRange();
+      range.selectNodeContents(timestampsRef.current);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      
+      toast({
+        title: "Text selected",
+        description: "Press Ctrl+C to copy, then images will auto-delete",
+      });
+    }
+  };
+
+  const startDeleteCountdown = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+    }
+    
+    setDeleteCountdown(2);
+    
+    const interval = setInterval(() => {
+      setDeleteCountdown(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          deleteAllMutation.mutate();
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    
+    countdownTimerRef.current = interval;
+  };
+
+  const cancelDeleteCountdown = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    setDeleteCountdown(null);
+    toast({
+      title: "Auto-delete cancelled",
+      description: "Your images are safe",
+    });
+  };
+
+  useEffect(() => {
+    const handleCopy = (e: ClipboardEvent) => {
+      const selection = window.getSelection();
+      if (selection && timestampsRef.current?.contains(selection.anchorNode)) {
+        startDeleteCountdown();
+      }
+    };
+
+    document.addEventListener("copy", handleCopy);
+    return () => {
+      document.removeEventListener("copy", handleCopy);
+      if (countdownTimerRef.current) {
+        clearInterval(countdownTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (deleteCountdown === null && countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+  }, [deleteCountdown]);
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -152,13 +227,28 @@ export default function Home() {
             </div>
             {images.length > 0 && (
               <Button
-                variant="destructive"
+                variant={deleteCountdown !== null ? "outline" : "destructive"}
                 size="sm"
-                onClick={() => setDeleteAllDialogOpen(true)}
+                onClick={() => {
+                  if (deleteCountdown !== null) {
+                    cancelDeleteCountdown();
+                  } else {
+                    setDeleteAllDialogOpen(true);
+                  }
+                }}
                 data-testid="button-delete-all"
               >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete All
+                {deleteCountdown !== null ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Cancel ({deleteCountdown}s)
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete All
+                  </>
+                )}
               </Button>
             )}
           </div>
@@ -176,12 +266,36 @@ export default function Home() {
 
         {/* Separator */}
         {images.length > 0 && (
-          <div className="flex items-center gap-4">
-            <Separator className="flex-1" />
-            <span className="text-sm text-muted-foreground font-medium">
-              Your Images
-            </span>
-            <Separator className="flex-1" />
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <Separator className="flex-1" />
+              <span className="text-sm text-muted-foreground font-medium">
+                Your Images
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSelectAllTimestamps}
+                data-testid="button-select-all"
+              >
+                <FileText className="w-4 h-4 mr-2" />
+                Select All
+              </Button>
+              <Separator className="flex-1" />
+            </div>
+            
+            {/* Timestamps text area */}
+            <div 
+              ref={timestampsRef}
+              className="text-xs text-muted-foreground space-y-1 select-text"
+              data-testid="text-timestamps"
+            >
+              {images.map((image) => (
+                <div key={image.id}>
+                  {image.fileName} - {new Date(image.uploadedAt).toLocaleDateString()} {new Date(image.uploadedAt).toLocaleTimeString()}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
