@@ -25,7 +25,6 @@ export default function Home() {
   const [isUploading, setIsUploading] = useState(false);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null);
-  const timestampsRef = useRef<HTMLDivElement>(null);
   const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
 
@@ -139,10 +138,23 @@ export default function Home() {
   };
 
   const handleSelectAllTimestamps = () => {
-    if (timestampsRef.current) {
-      const range = document.createRange();
-      range.selectNodeContents(timestampsRef.current);
-      const selection = window.getSelection();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    
+    // Find all timestamp elements in the gallery
+    const galleryElement = document.querySelector('[data-testid^="card-image-"]');
+    if (!galleryElement) return;
+    
+    const parentGrid = galleryElement.parentElement;
+    if (!parentGrid) return;
+    
+    // Select from the first to the last card
+    const firstCard = parentGrid.firstElementChild;
+    const lastCard = parentGrid.lastElementChild;
+    
+    if (firstCard && lastCard) {
+      range.setStartBefore(firstCard);
+      range.setEndAfter(lastCard);
       selection?.removeAllRanges();
       selection?.addRange(range);
       
@@ -189,7 +201,10 @@ export default function Home() {
   useEffect(() => {
     const handleCopy = (e: ClipboardEvent) => {
       const selection = window.getSelection();
-      if (selection && timestampsRef.current?.contains(selection.anchorNode)) {
+      const selectedText = selection?.toString();
+      
+      // Check if any timestamp text from images is being copied
+      if (selectedText && selectedText.includes('image.png')) {
         startDeleteCountdown();
       }
     };
@@ -266,36 +281,21 @@ export default function Home() {
 
         {/* Separator */}
         {images.length > 0 && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-4">
-              <Separator className="flex-1" />
-              <span className="text-sm text-muted-foreground font-medium">
-                Your Images
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleSelectAllTimestamps}
-                data-testid="button-select-all"
-              >
-                <FileText className="w-4 h-4 mr-2" />
-                Select All
-              </Button>
-              <Separator className="flex-1" />
-            </div>
-            
-            {/* Timestamps text area */}
-            <div 
-              ref={timestampsRef}
-              className="text-xs text-muted-foreground space-y-1 select-text"
-              data-testid="text-timestamps"
+          <div className="flex items-center gap-4">
+            <Separator className="flex-1" />
+            <span className="text-sm text-muted-foreground font-medium">
+              Your Images
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSelectAllTimestamps}
+              data-testid="button-select-all"
             >
-              {images.map((image) => (
-                <div key={image.id}>
-                  {image.fileName} - {new Date(image.uploadedAt).toLocaleDateString()} {new Date(image.uploadedAt).toLocaleTimeString()}
-                </div>
-              ))}
-            </div>
+              <FileText className="w-4 h-4 mr-2" />
+              Select All
+            </Button>
+            <Separator className="flex-1" />
           </div>
         )}
 
