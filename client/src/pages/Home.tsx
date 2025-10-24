@@ -330,7 +330,7 @@ export default function Home() {
                 return (
                   <div 
                     key={`image-${item.data.id}`}
-                    className="bg-card rounded-lg border overflow-hidden hover-elevate"
+                    className="bg-card rounded-lg border overflow-hidden"
                     data-testid={`card-image-${item.data.id}`}
                   >
                     <img
@@ -339,33 +339,11 @@ export default function Home() {
                       className="w-full h-auto"
                       loading="lazy"
                     />
-                    <div className="p-4 space-y-2">
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{item.data.fileName}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {new Date(item.data.uploadedAt).toLocaleDateString()} {new Date(item.data.uploadedAt).toLocaleTimeString()}
-                          </p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => deleteMutation.mutate(item.data.id)}
-                          data-testid={`button-delete-${item.data.id}`}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          readOnly
-                          value={`${window.location.origin}${item.data.objectPath}`}
-                          className="flex-1 text-xs bg-muted px-2 py-1 rounded font-mono"
-                          onClick={(e) => e.currentTarget.select()}
-                          data-testid={`input-url-${item.data.id}`}
-                        />
-                      </div>
+                    <div className="p-4">
+                      <p className="text-sm font-medium">{item.data.fileName}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {new Date(item.data.uploadedAt).toLocaleDateString()} {new Date(item.data.uploadedAt).toLocaleTimeString()}
+                      </p>
                     </div>
                   </div>
                 );

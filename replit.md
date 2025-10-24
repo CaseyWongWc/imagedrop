@@ -7,9 +7,10 @@ ImageDrop is a single-page image hosting application that enables users to uploa
 **Recent Updates** (October 2025):
 - **Continuous Capture Mode**: Toggle switch enables rapid-fire photo taking that auto-uploads each shot while keeping camera open
 - **Real-Time Sync**: Gallery auto-refreshes every 3 seconds for immediate updates
-- **Bulk Management**: Delete All button with confirmation dialog removes all images and cloud storage objects (future: will also clear timestamped text from audio transcriptions)
+- **Bulk Management**: Delete All button with confirmation dialog removes all images and cloud storage objects as well as transcriptions
 - **Always-Visible Timestamps**: Date/time stamps permanently visible for easy text capture (Ctrl+C) during class notes
-- **Chronological Gallery**: Images displayed oldest-first for timeline viewing
+- **Inline Timeline View**: Images and transcriptions display chronologically mixed together - oldest first - showing exactly when each photo was taken and each transcription was created
+- **Persistent Recording Bar**: Background audio recording with pause/resume, auto-transcription every 30 seconds, non-blocking UI allows photo capture during recording
 
 ## User Preferences
 
@@ -32,9 +33,10 @@ Preferred communication style: Simple, everyday language.
 
 **State Management**
 - TanStack Query (React Query) for server state management, caching, and data synchronization
-- Real-time polling with 3-second refetch interval for automatic gallery updates
+- Real-time polling with 3-second refetch interval for automatic gallery and transcription updates
 - Local React state for UI interactions and component-level state
 - Query invalidation pattern for real-time updates after mutations
+- Timeline merging: Images and transcriptions combined client-side into chronological order sorted by timestamp
 
 **Upload Mechanism**
 - Uppy file uploader integration for robust multi-method uploads:
@@ -68,6 +70,8 @@ Preferred communication style: Simple, everyday language.
   - `GET /api/images` - Retrieve all images (auto-polled every 3 seconds)
   - `DELETE /api/images/:id` - Remove single image record and cloud object
   - `DELETE /api/images` - Bulk delete all images and cloud objects
+  - `POST /api/transcribe` - Upload audio segment and transcribe via OpenAI Whisper
+  - `GET /api/transcriptions` - Retrieve all transcriptions (auto-polled every 3 seconds)
   - `GET /objects/:objectPath(*)` - Serve uploaded files
 - JSON request/response format with Zod schema validation
 - Error handling with appropriate HTTP status codes
