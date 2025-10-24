@@ -17,6 +17,9 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const segmentTimerRef = useRef<NodeJS.Timeout | null>(null);
   const pauseTimeRef = useRef<number>(0);
+  const segmentStartTimeRef = useRef<number>(0);
+  const isRecordingRef = useRef<boolean>(false);
+  const isPausedRef = useRef<boolean>(false);
   const { toast } = useToast();
 
   const SEGMENT_DURATION = 30000;
@@ -31,11 +34,22 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
 
   const startRecording = async () => {
     try {
+      // Clear any existing timers
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      if (segmentTimerRef.current) {
+        clearTimeout(segmentTimerRef.current);
+        segmentTimerRef.current = null;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
+      segmentStartTimeRef.current = Date.now();
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
@@ -48,8 +62,8 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
         await transcribeAudio(audioBlob);
         chunksRef.current = [];
         
-        // Continue recording if not manually stopped
-        if (isRecording && !isPaused) {
+        // Continue recording if not manually stopped (check ref not state)
+        if (isRecordingRef.current && !isPausedRef.current) {
           startRecording();
         }
       };
@@ -57,6 +71,8 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
       mediaRecorder.start();
       setIsRecording(true);
       setIsPaused(false);
+      isRecordingRef.current = true;
+      isPausedRef.current = false;
       pauseTimeRef.current = 0;
 
       // Start timer
@@ -71,10 +87,12 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
         }
       }, SEGMENT_DURATION);
 
-      toast({
-        title: "Recording started",
-        description: "Audio will be transcribed every 30 seconds",
-      });
+      if (recordingTime === 0) {
+        toast({
+          title: "Recording started",
+          description: "Audio will be transcribed every 30 seconds",
+        });
+      }
 
     } catch (error) {
       toast({
@@ -89,6 +107,8 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.pause();
       setIsPaused(true);
+      isPausedRef.current = true;
+      
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
@@ -105,25 +125,33 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "paused") {
       mediaRecorderRef.current.resume();
       setIsPaused(false);
+      isPausedRef.current = false;
       
       // Resume timer
       timerRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
 
-      // Calculate remaining time for segment
-      const elapsed = pauseTimeRef.current > 0 ? Date.now() - pauseTimeRef.current : 0;
-      const remaining = Math.max(SEGMENT_DURATION - elapsed, 5000);
+      // Calculate remaining time for segment based on when segment started
+      const now = Date.now();
+      const segmentElapsed = now - segmentStartTimeRef.current - (pauseTimeRef.current > 0 ? now - pauseTimeRef.current : 0);
+      const remaining = Math.max(SEGMENT_DURATION - segmentElapsed, 1000);
 
       segmentTimerRef.current = setTimeout(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
           mediaRecorderRef.current.stop();
         }
       }, remaining);
+      
+      pauseTimeRef.current = 0;
     }
   };
 
   const stopRecording = () => {
+    // Update refs first so onstop handler knows to stop
+    isRecordingRef.current = false;
+    isPausedRef.current = false;
+    
     if (mediaRecorderRef.current) {
       if (mediaRecorderRef.current.state === "recording" || mediaRecorderRef.current.state === "paused") {
         mediaRecorderRef.current.stop();
