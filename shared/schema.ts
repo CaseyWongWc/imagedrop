@@ -19,3 +19,17 @@ export const insertImageSchema = createInsertSchema(images).omit({
 
 export type InsertImage = z.infer<typeof insertImageSchema>;
 export type Image = typeof images.$inferSelect;
+
+// Transcription schema for audio transcriptions
+export const transcriptions = pgTable("transcriptions", {
+  id: varchar("id").primaryKey(),
+  text: text("text").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertTranscriptionSchema = createInsertSchema(transcriptions).omit({
+  createdAt: true,
+});
+
+export type InsertTranscription = z.infer<typeof insertTranscriptionSchema>;
+export type Transcription = typeof transcriptions.$inferSelect;
