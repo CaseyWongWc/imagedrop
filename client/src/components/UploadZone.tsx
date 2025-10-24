@@ -89,11 +89,15 @@ export function UploadZone({ onFileSelect, onOpenCamera, isUploading }: UploadZo
       data-testid="upload-zone"
     >
       <div className="p-8 md:p-12 text-center space-y-6">
-        <div className="flex justify-center">
-          <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center">
-            <Upload className="w-10 h-10 text-primary" />
-          </div>
-        </div>
+        {/* Mobile-optimized camera button - prominent and easy to tap */}
+        <button
+          onClick={onOpenCamera}
+          disabled={isUploading}
+          className="mx-auto w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center hover-elevate active-elevate-2 transition-transform disabled:opacity-50"
+          data-testid="button-camera-main"
+        >
+          <Camera className="w-10 h-10 text-primary" />
+        </button>
 
         <div className="space-y-2">
           <h2 className="text-2xl font-bold">
@@ -113,16 +117,6 @@ export function UploadZone({ onFileSelect, onOpenCamera, isUploading }: UploadZo
           >
             <ImageIcon className="w-4 h-4 mr-2" />
             Browse Files
-          </Button>
-
-          <Button
-            variant="outline"
-            onClick={onOpenCamera}
-            disabled={isUploading}
-            data-testid="button-camera"
-          >
-            <Camera className="w-4 h-4 mr-2" />
-            Take Photo
           </Button>
 
           <Button

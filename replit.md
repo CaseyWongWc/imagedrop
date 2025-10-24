@@ -7,7 +7,7 @@ ImageDrop is a single-page image hosting application that enables users to uploa
 **Recent Updates** (October 2025):
 - **Continuous Capture Mode**: Toggle switch enables rapid-fire photo taking that auto-uploads each shot while keeping camera open
 - **Real-Time Sync**: Gallery auto-refreshes every 3 seconds for immediate updates
-- **Bulk Management**: Delete All button with confirmation dialog removes all images and cloud storage objects
+- **Bulk Management**: Delete All button with confirmation dialog removes all images and cloud storage objects (future: will also clear timestamped text from audio transcriptions)
 - **Always-Visible Timestamps**: Date/time stamps permanently visible for easy text capture (Ctrl+C) during class notes
 - **Chronological Gallery**: Images displayed oldest-first for timeline viewing
 
