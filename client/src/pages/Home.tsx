@@ -19,7 +19,7 @@ export default function Home() {
 
   const uploadMutation = useMutation({
     mutationFn: async (imageData: InsertImage) => {
-      return await apiRequest<Image>("POST", "/api/images", imageData);
+      return await apiRequest("POST", "/api/images", imageData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/images"] });
@@ -44,13 +44,14 @@ export default function Home() {
 
     try {
       for (const file of files) {
-        const uploadUrlResponse = await apiRequest<{ uploadURL: string }>(
+        const uploadUrlRes = await apiRequest(
           "POST",
           "/api/objects/upload",
           undefined
         );
+        const uploadUrlData = await uploadUrlRes.json() as { uploadURL: string };
 
-        await fetch(uploadUrlResponse.uploadURL, {
+        await fetch(uploadUrlData.uploadURL, {
           method: "PUT",
           body: file,
           headers: {
@@ -58,7 +59,7 @@ export default function Home() {
           },
         });
 
-        const url = new URL(uploadUrlResponse.uploadURL);
+        const url = new URL(uploadUrlData.uploadURL);
         const objectId = url.pathname.split("/").pop()?.split("?")[0] || "";
 
         const imageData: InsertImage = {
