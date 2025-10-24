@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Camera, X, RefreshCw } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Camera, X, RefreshCw, Zap } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface CameraCaptureProps {
@@ -15,6 +17,7 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [captured, setCaptured] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+  const [continuousMode, setContinuousMode] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -61,7 +64,7 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
     onClose();
   };
 
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     if (!videoRef.current) return;
 
     const canvas = document.createElement("canvas");
@@ -69,9 +72,31 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
     canvas.height = videoRef.current.videoHeight;
     const ctx = canvas.getContext("2d");
     
-    if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0);
-      const dataUrl = canvas.toDataURL("image/png");
+    if (!ctx) return;
+    
+    ctx.drawImage(videoRef.current, 0, 0);
+    const dataUrl = canvas.toDataURL("image/png");
+    
+    if (continuousMode) {
+      // Auto-upload in continuous mode - stay on camera
+      try {
+        const res = await fetch(dataUrl);
+        const blob = await res.blob();
+        const file = new File([blob], `camera-${Date.now()}.png`, { type: "image/png" });
+        onCapture(file);
+        toast({
+          title: "Photo captured!",
+          description: "Uploading in background",
+        });
+      } catch (error) {
+        toast({
+          title: "Capture failed",
+          description: "Please try again",
+          variant: "destructive",
+        });
+      }
+    } else {
+      // Normal mode - show preview
       setCaptured(dataUrl);
     }
   };
@@ -103,7 +128,7 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && handleClose()}>
-      <DialogContent className="max-w-2xl" data-testid="dialog-camera">
+      <DialogContent className="max-w-2xl w-[95vw] md:w-full" data-testid="dialog-camera">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Camera className="w-5 h-5" />
@@ -112,7 +137,22 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="relative aspect-video bg-muted rounded-lg overflow-hidden">
+          {/* Continuous Mode Toggle */}
+          <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-muted-foreground" />
+              <Label htmlFor="continuous-mode" className="cursor-pointer">
+                Continuous Capture
+              </Label>
+            </div>
+            <Switch
+              id="continuous-mode"
+              checked={continuousMode}
+              onCheckedChange={setContinuousMode}
+              data-testid="switch-continuous-mode"
+            />
+          </div>
+          <div className="relative w-full bg-muted rounded-lg overflow-hidden aspect-video md:aspect-video">
             {!captured ? (
               <video
                 ref={videoRef}
