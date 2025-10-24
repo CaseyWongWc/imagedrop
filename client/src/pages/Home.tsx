@@ -186,7 +186,7 @@ export default function Home() {
       clearInterval(countdownTimerRef.current);
     }
     
-    setDeleteCountdown(2);
+    setDeleteCountdown(10);
     
     const interval = setInterval(() => {
       setDeleteCountdown(prev => {
