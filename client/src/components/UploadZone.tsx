@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Upload, Image as ImageIcon, Camera, Clipboard, Mic } from "lucide-react";
+import { Upload, Image as ImageIcon, Camera, Clipboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -7,11 +7,10 @@ import { useToast } from "@/hooks/use-toast";
 interface UploadZoneProps {
   onFileSelect: (files: File[]) => void;
   onOpenCamera: () => void;
-  onOpenRecorder: () => void;
   isUploading?: boolean;
 }
 
-export function UploadZone({ onFileSelect, onOpenCamera, onOpenRecorder, isUploading }: UploadZoneProps) {
+export function UploadZone({ onFileSelect, onOpenCamera, isUploading }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const { toast } = useToast();
 
@@ -90,33 +89,22 @@ export function UploadZone({ onFileSelect, onOpenCamera, onOpenRecorder, isUploa
       data-testid="upload-zone"
     >
       <div className="p-8 md:p-12 text-center space-y-6">
-        {/* Mobile-optimized buttons - prominent and easy to tap */}
-        <div className="flex items-center justify-center gap-4">
-          <button
-            onClick={onOpenCamera}
-            disabled={isUploading}
-            className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center hover-elevate active-elevate-2 transition-transform disabled:opacity-50"
-            data-testid="button-camera-main"
-          >
-            <Camera className="w-10 h-10 text-primary" />
-          </button>
-          
-          <button
-            onClick={onOpenRecorder}
-            disabled={isUploading}
-            className="w-20 h-20 rounded-full bg-red-500/10 flex items-center justify-center hover-elevate active-elevate-2 transition-transform disabled:opacity-50"
-            data-testid="button-recorder-main"
-          >
-            <Mic className="w-10 h-10 text-red-500" />
-          </button>
-        </div>
+        {/* Mobile-optimized camera button - prominent and easy to tap */}
+        <button
+          onClick={onOpenCamera}
+          disabled={isUploading}
+          className="mx-auto w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center hover-elevate active-elevate-2 transition-transform disabled:opacity-50"
+          data-testid="button-camera-main"
+        >
+          <Camera className="w-10 h-10 text-primary" />
+        </button>
 
         <div className="space-y-2">
           <h2 className="text-2xl font-bold">
             {isUploading ? "Uploading..." : "Upload Your Images"}
           </h2>
           <p className="text-muted-foreground max-w-md mx-auto">
-            Drop images here, paste (Ctrl+V), record audio, or choose an option below
+            Drop images here, paste from clipboard (Ctrl+V), or choose an option below
           </p>
         </div>
 

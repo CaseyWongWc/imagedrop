@@ -4,7 +4,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Image, InsertImage, Transcription } from "@shared/schema";
 import { UploadZone } from "@/components/UploadZone";
 import { CameraCapture } from "@/components/CameraCapture";
-import { AudioRecorder } from "@/components/AudioRecorder";
+import { RecordingBar } from "@/components/RecordingBar";
 import { ImageGallery } from "@/components/ImageGallery";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
@@ -23,7 +23,6 @@ import {
 
 export default function Home() {
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [recorderOpen, setRecorderOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null);
@@ -306,7 +305,6 @@ export default function Home() {
         <UploadZone
           onFileSelect={handleFileUpload}
           onOpenCamera={() => setCameraOpen(true)}
-          onOpenRecorder={() => setRecorderOpen(true)}
           isUploading={isUploading}
         />
 
@@ -378,10 +376,8 @@ export default function Home() {
         onCapture={(file) => handleFileUpload([file])}
       />
 
-      {/* Audio Recorder Modal */}
-      <AudioRecorder
-        open={recorderOpen}
-        onClose={() => setRecorderOpen(false)}
+      {/* Recording Bar */}
+      <RecordingBar
         onTranscribed={() => queryClient.invalidateQueries({ queryKey: ["/api/transcriptions"] })}
       />
 
@@ -416,6 +412,8 @@ export default function Home() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {/* Add padding at bottom to account for RecordingBar */}
+      <div className="h-20" />
     </div>
   );
 }
