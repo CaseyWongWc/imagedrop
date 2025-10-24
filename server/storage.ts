@@ -1,4 +1,4 @@
-import { type Image, type InsertImage } from "@shared/schema";
+import { type Image, type InsertImage, type Transcription, type InsertTranscription } from "@shared/schema";
 
 export interface IStorage {
   // Image operations
@@ -7,13 +7,22 @@ export interface IStorage {
   getAllImages(): Promise<Image[]>;
   deleteImage(id: string): Promise<void>;
   deleteAllImages(): Promise<void>;
+  
+  // Transcription operations
+  createTranscription(transcription: InsertTranscription): Promise<Transcription>;
+  getTranscription(id: string): Promise<Transcription | undefined>;
+  getAllTranscriptions(): Promise<Transcription[]>;
+  deleteTranscription(id: string): Promise<void>;
+  deleteAllTranscriptions(): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
   private images: Map<string, Image>;
+  private transcriptions: Map<string, Transcription>;
 
   constructor() {
     this.images = new Map();
+    this.transcriptions = new Map();
   }
 
   async createImage(insertImage: InsertImage): Promise<Image> {
@@ -41,6 +50,33 @@ export class MemStorage implements IStorage {
 
   async deleteAllImages(): Promise<void> {
     this.images.clear();
+  }
+
+  async createTranscription(insertTranscription: InsertTranscription): Promise<Transcription> {
+    const transcription: Transcription = {
+      ...insertTranscription,
+      createdAt: new Date(),
+    };
+    this.transcriptions.set(transcription.id, transcription);
+    return transcription;
+  }
+
+  async getTranscription(id: string): Promise<Transcription | undefined> {
+    return this.transcriptions.get(id);
+  }
+
+  async getAllTranscriptions(): Promise<Transcription[]> {
+    return Array.from(this.transcriptions.values()).sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
+    );
+  }
+
+  async deleteTranscription(id: string): Promise<void> {
+    this.transcriptions.delete(id);
+  }
+
+  async deleteAllTranscriptions(): Promise<void> {
+    this.transcriptions.clear();
   }
 }
 
