@@ -7,14 +7,28 @@ import { CameraCapture } from "@/components/CameraCapture";
 import { ImageGallery } from "@/components/ImageGallery";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
+import { Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export default function Home() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const { toast } = useToast();
 
   const { data: imagesData = [], isLoading } = useQuery<Image[]>({
     queryKey: ["/api/images"],
+    refetchInterval: 3000, // Auto-refresh every 3 seconds
   });
 
   const images = [...imagesData].reverse();
@@ -37,6 +51,27 @@ export default function Home() {
       toast({
         title: "Image deleted",
         description: "Image has been removed from your gallery",
+      });
+    },
+  });
+
+  const deleteAllMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("DELETE", "/api/images", undefined);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/images"] });
+      setDeleteAllDialogOpen(false);
+      toast({
+        title: "All images deleted",
+        description: "Your gallery has been cleared",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Delete failed",
+        description: "Could not delete all images. Please try again.",
+        variant: "destructive",
       });
     },
   });
@@ -104,15 +139,28 @@ export default function Home() {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b sticky top-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50">
-        <div className="container max-w-7xl mx-auto px-4 md:px-8 h-16 flex items-center justify-between">
+        <div className="container max-w-7xl mx-auto px-4 md:px-8 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
               <span className="text-primary-foreground font-bold text-lg">I</span>
             </div>
             <h1 className="text-xl font-bold" data-testid="text-app-title">ImageDrop</h1>
           </div>
-          <div className="text-sm text-muted-foreground" data-testid="text-image-count">
-            {images.length} {images.length === 1 ? "image" : "images"}
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-muted-foreground" data-testid="text-image-count">
+              {images.length} {images.length === 1 ? "image" : "images"}
+            </div>
+            {images.length > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setDeleteAllDialogOpen(true)}
+                data-testid="button-delete-all"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete All
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -156,6 +204,38 @@ export default function Home() {
         onClose={() => setCameraOpen(false)}
         onCapture={(file) => handleFileUpload([file])}
       />
+
+      {/* Delete All Confirmation Dialog */}
+      <AlertDialog open={deleteAllDialogOpen} onOpenChange={setDeleteAllDialogOpen}>
+        <AlertDialogContent data-testid="dialog-delete-all">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete all images?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete all {images.length} {images.length === 1 ? "image" : "images"} from your gallery.
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel 
+              disabled={deleteAllMutation.isPending}
+              data-testid="button-cancel-delete-all"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                deleteAllMutation.mutate();
+              }}
+              disabled={deleteAllMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-all"
+            >
+              {deleteAllMutation.isPending ? "Deleting..." : "Delete All"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

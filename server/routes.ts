@@ -102,6 +102,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Delete all images
+  app.delete("/api/images", async (req, res) => {
+    try {
+      // Get all images first to delete from cloud storage
+      const images = await storage.getAllImages();
+      
+      // Delete all objects from cloud storage
+      for (const image of images) {
+        try {
+          const objectFile = await objectStorageService.getObjectEntityFile(image.objectPath);
+          await objectFile.delete();
+        } catch (error) {
+          if (!(error instanceof ObjectNotFoundError)) {
+            console.error(`Error deleting object ${image.objectPath}:`, error);
+          }
+          // Continue even if individual deletes fail
+        }
+      }
+
+      // Delete all metadata
+      await storage.deleteAllImages();
+      res.json({ success: true, deletedCount: images.length });
+    } catch (error) {
+      console.error("Error deleting all images:", error);
+      res.status(500).json({ error: "Failed to delete all images" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;

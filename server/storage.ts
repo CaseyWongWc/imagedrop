@@ -6,6 +6,7 @@ export interface IStorage {
   getImage(id: string): Promise<Image | undefined>;
   getAllImages(): Promise<Image[]>;
   deleteImage(id: string): Promise<void>;
+  deleteAllImages(): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -36,6 +37,10 @@ export class MemStorage implements IStorage {
 
   async deleteImage(id: string): Promise<void> {
     this.images.delete(id);
+  }
+
+  async deleteAllImages(): Promise<void> {
+    this.images.clear();
   }
 }
 
