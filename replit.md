@@ -4,6 +4,13 @@
 
 ImageDrop is a single-page image hosting application that enables users to upload, manage, and share images instantly. The application provides multiple upload methods (drag-and-drop, file browsing, clipboard paste, and camera capture) with a clean, minimal interface inspired by Imgur and Postimages. Users receive shareable URLs immediately upon upload for easy embedding anywhere online.
 
+**Recent Updates** (October 2025):
+- **Continuous Capture Mode**: Toggle switch enables rapid-fire photo taking that auto-uploads each shot while keeping camera open
+- **Real-Time Sync**: Gallery auto-refreshes every 3 seconds for immediate updates
+- **Bulk Management**: Delete All button with confirmation dialog removes all images and cloud storage objects
+- **Always-Visible Timestamps**: Date/time stamps permanently visible for easy text capture (Ctrl+C) during class notes
+- **Chronological Gallery**: Images displayed oldest-first for timeline viewing
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
@@ -25,6 +32,7 @@ Preferred communication style: Simple, everyday language.
 
 **State Management**
 - TanStack Query (React Query) for server state management, caching, and data synchronization
+- Real-time polling with 3-second refetch interval for automatic gallery updates
 - Local React state for UI interactions and component-level state
 - Query invalidation pattern for real-time updates after mutations
 
@@ -33,9 +41,15 @@ Preferred communication style: Simple, everyday language.
   - Drag-and-drop zone
   - File browser input
   - Clipboard paste (Ctrl+V)
-  - Camera capture via WebRTC MediaDevices API
+  - Camera capture via WebRTC MediaDevices API with continuous mode toggle
 - AWS S3-compatible upload strategy using pre-signed URLs
 - Client-side image validation (file type, size limits)
+
+**Camera Capture Features**
+- Instant camera initialization on back camera (environment-facing)
+- Continuous capture mode: toggle for rapid-fire photo taking without preview interruptions
+- Auto-upload each photo while maintaining camera stream
+- Flip camera button for switching between back and front cameras
 
 ### Backend Architecture
 
@@ -49,11 +63,13 @@ Preferred communication style: Simple, everyday language.
 - RESTful API endpoints:
   - `POST /api/objects/upload` - Generate pre-signed upload URLs
   - `POST /api/images` - Create image metadata records
-  - `GET /api/images` - Retrieve all images
-  - `DELETE /api/images/:id` - Remove image records
+  - `GET /api/images` - Retrieve all images (auto-polled every 3 seconds)
+  - `DELETE /api/images/:id` - Remove single image record and cloud object
+  - `DELETE /api/images` - Bulk delete all images and cloud objects
   - `GET /objects/:objectPath(*)` - Serve uploaded files
 - JSON request/response format with Zod schema validation
 - Error handling with appropriate HTTP status codes
+- Proper error surfacing for failed mutations via toast notifications
 
 **Storage Abstraction**
 - Interface-based storage pattern (`IStorage`) for flexibility
