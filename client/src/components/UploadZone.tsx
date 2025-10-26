@@ -19,7 +19,7 @@ export function UploadZone({ onFileSelect, onOpenCamera, isUploading }: UploadZo
     setIsDragging(false);
 
     const files = Array.from(e.dataTransfer.files).filter(file =>
-      file.type.startsWith("image/")
+      file.type.startsWith("image/") || file.name.toLowerCase().endsWith('.heic') || file.name.toLowerCase().endsWith('.heif')
     );
 
     if (files.length > 0) {
@@ -132,7 +132,7 @@ export function UploadZone({ onFileSelect, onOpenCamera, isUploading }: UploadZo
         <input
           id="file-input"
           type="file"
-          accept="image/*"
+          accept="image/*,.heic,.heif"
           multiple
           className="hidden"
           onChange={handleFileInput}
@@ -140,7 +140,7 @@ export function UploadZone({ onFileSelect, onOpenCamera, isUploading }: UploadZo
         />
 
         <div className="text-xs text-muted-foreground">
-          Supports PNG, JPG, GIF, WebP • Max 10MB per file
+          Supports PNG, JPG, GIF, WebP, HEIC • Max 10MB per file
         </div>
       </div>
     </Card>
