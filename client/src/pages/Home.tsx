@@ -20,6 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import heic2any from "heic2any";
 
 export default function Home() {
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -48,8 +49,8 @@ export default function Home() {
     ...imagesData.map(img => ({ type: 'image' as const, data: img })),
     ...transcriptionsData.map(trans => ({ type: 'transcription' as const, data: trans }))
   ].sort((a, b) => {
-    const timeA = new Date(a.data.uploadedAt || a.data.createdAt).getTime();
-    const timeB = new Date(b.data.uploadedAt || b.data.createdAt).getTime();
+    const timeA = a.type === 'image' ? new Date(a.data.uploadedAt).getTime() : new Date(a.data.createdAt).getTime();
+    const timeB = b.type === 'image' ? new Date(b.data.uploadedAt).getTime() : new Date(b.data.createdAt).getTime();
     return timeA - timeB; // oldest first
   });
 
@@ -97,11 +98,54 @@ export default function Home() {
     },
   });
 
+  const convertHeicToPng = async (file: File): Promise<File> => {
+    const isHeic = file.name.toLowerCase().endsWith('.heic') || 
+                   file.name.toLowerCase().endsWith('.heif') ||
+                   file.type === 'image/heic' ||
+                   file.type === 'image/heif';
+    
+    if (!isHeic) {
+      return file;
+    }
+
+    try {
+      const convertedBlob = await heic2any({
+        blob: file,
+        toType: "image/png",
+        quality: 0.9,
+      });
+
+      const blob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
+      const newFileName = file.name.replace(/\.heic$/i, '.png').replace(/\.heif$/i, '.png');
+      
+      return new File([blob], newFileName, {
+        type: "image/png",
+        lastModified: Date.now(),
+      });
+    } catch (error) {
+      console.error("HEIC conversion error:", error);
+      throw new Error("Failed to convert HEIC/HEIF file");
+    }
+  };
+
   const handleFileUpload = async (files: File[]) => {
     setIsUploading(true);
 
     try {
       for (const file of files) {
+        let processedFile = file;
+        
+        try {
+          processedFile = await convertHeicToPng(file);
+        } catch (conversionError) {
+          toast({
+            title: "Conversion failed",
+            description: "Could not convert HEIC/HEIF file. Please try a different format.",
+            variant: "destructive",
+          });
+          continue;
+        }
+
         const uploadUrlRes = await apiRequest(
           "POST",
           "/api/objects/upload",
@@ -111,9 +155,9 @@ export default function Home() {
 
         await fetch(uploadUrlData.uploadURL, {
           method: "PUT",
-          body: file,
+          body: processedFile,
           headers: {
-            "Content-Type": file.type,
+            "Content-Type": processedFile.type,
           },
         });
 
@@ -123,9 +167,9 @@ export default function Home() {
         const imageData: InsertImage = {
           id: objectId,
           objectPath: `/objects/uploads/${objectId}`,
-          fileName: file.name,
-          fileSize: formatFileSize(file.size),
-          mimeType: file.type,
+          fileName: processedFile.name,
+          fileSize: formatFileSize(processedFile.size),
+          mimeType: processedFile.type,
         };
 
         await uploadMutation.mutateAsync(imageData);
