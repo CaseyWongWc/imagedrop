@@ -5,6 +5,7 @@
 ImageDrop is a single-page image hosting application that enables users to upload, manage, and share images instantly. The application provides multiple upload methods (drag-and-drop, file browsing, clipboard paste, and camera capture) with a clean, minimal interface inspired by Imgur and Postimages. Users receive shareable URLs immediately upon upload for easy embedding anywhere online.
 
 **Recent Updates** (November 2025):
+- **HTML Export**: Export all images and transcriptions as a standalone HTML file with embedded base64 images - works offline, perfect for mobile-to-laptop workflow
 - **Settings Panel**: Configurable auto-delete with toggle and customizable timer (5s-60s), persisted to localStorage
 - **Enhanced Camera Quality**: 1920x1080 resolution for clearer board text capture
 - **Camera Zoom**: Digital zoom slider (1x-3x) with hardware zoom support when available, CSS fallback
