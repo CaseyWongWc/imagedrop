@@ -68,9 +68,13 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
         const mediaStream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode,
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
+            width: { ideal: 3840 },
+            height: { ideal: 2160 },
+            frameRate: { ideal: 60 },
+            focusMode: { ideal: "continuous" },
+            exposureMode: { ideal: "continuous" },
+            whiteBalanceMode: { ideal: "continuous" },
+          } as any,
           audio: false,
         });
 
@@ -147,14 +151,14 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
       ctx.drawImage(video, 0, 0);
     }
     
-    const dataUrl = canvas.toDataURL("image/png");
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
     
     if (continuousMode) {
       // Auto-upload in continuous mode - stay on camera
       try {
         const res = await fetch(dataUrl);
         const blob = await res.blob();
-        const file = new File([blob], `camera-${Date.now()}.png`, { type: "image/png" });
+        const file = new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" });
         onCapture(file);
         toast({
           title: "Photo captured!",
@@ -179,7 +183,7 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
     fetch(captured)
       .then(res => res.blob())
       .then(blob => {
-        const file = new File([blob], `camera-${Date.now()}.png`, { type: "image/png" });
+        const file = new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" });
         onCapture(file);
         handleClose();
       });
