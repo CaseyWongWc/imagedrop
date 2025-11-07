@@ -9,7 +9,7 @@ import { ImageGallery } from "@/components/ImageGallery";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { Trash2, FileText, Loader2 } from "lucide-react";
+import { Trash2, FileText, Loader2, Settings } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,15 +20,52 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import heic2any from "heic2any";
 
 export default function Home() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null);
   const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Settings with localStorage persistence
+  const [autoDeleteEnabled, setAutoDeleteEnabled] = useState(() => {
+    const saved = localStorage.getItem("auto-delete-enabled");
+    return saved === "true";
+  });
+  const [autoDeleteTimer, setAutoDeleteTimer] = useState(() => {
+    const saved = localStorage.getItem("auto-delete-timer");
+    return saved ? parseInt(saved) : 10;
+  });
+  
   const { toast } = useToast();
+
+  // Save settings to localStorage
+  useEffect(() => {
+    localStorage.setItem("auto-delete-enabled", autoDeleteEnabled.toString());
+  }, [autoDeleteEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("auto-delete-timer", autoDeleteTimer.toString());
+  }, [autoDeleteTimer]);
 
   const { data: imagesData = [], isLoading } = useQuery<Image[]>({
     queryKey: ["/api/images"],
@@ -220,17 +257,19 @@ export default function Home() {
       
       toast({
         title: "Text selected",
-        description: "Press Ctrl+C to copy, then auto-delete starts",
+        description: autoDeleteEnabled ? `Press Ctrl+C to copy, auto-delete in ${autoDeleteTimer}s` : "Press Ctrl+C to copy",
       });
     }
   };
 
   const startDeleteCountdown = () => {
+    if (!autoDeleteEnabled) return; // Don't start countdown if disabled
+    
     if (countdownTimerRef.current) {
       clearInterval(countdownTimerRef.current);
     }
     
-    setDeleteCountdown(10);
+    setDeleteCountdown(autoDeleteTimer);
     
     const interval = setInterval(() => {
       setDeleteCountdown(prev => {
@@ -279,7 +318,7 @@ export default function Home() {
         clearInterval(countdownTimerRef.current);
       }
     };
-  }, []);
+  }, [autoDeleteEnabled, autoDeleteTimer]);
 
   useEffect(() => {
     if (deleteCountdown === null && countdownTimerRef.current) {
@@ -303,6 +342,14 @@ export default function Home() {
             <div className="text-sm text-muted-foreground" data-testid="text-image-count">
               {timeline.length} {timeline.length === 1 ? "item" : "items"}
             </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSettingsOpen(true)}
+              data-testid="button-settings"
+            >
+              <Settings className="w-4 h-4" />
+            </Button>
             {timeline.length > 0 && (
               <Button
                 variant={deleteCountdown !== null ? "outline" : "destructive"}
@@ -453,6 +500,61 @@ export default function Home() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Settings Dialog */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent data-testid="dialog-settings">
+          <DialogHeader>
+            <DialogTitle>Settings</DialogTitle>
+            <DialogDescription>
+              Customize your ImageDrop experience
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {/* Auto-delete toggle */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="auto-delete-toggle">Auto-delete after copy</Label>
+                <p className="text-sm text-muted-foreground">
+                  Automatically delete all images after copying text
+                </p>
+              </div>
+              <Switch
+                id="auto-delete-toggle"
+                checked={autoDeleteEnabled}
+                onCheckedChange={setAutoDeleteEnabled}
+                data-testid="switch-auto-delete"
+              />
+            </div>
+
+            {/* Timer duration selector */}
+            {autoDeleteEnabled && (
+              <div className="space-y-2">
+                <Label htmlFor="timer-select">Auto-delete timer</Label>
+                <Select
+                  value={autoDeleteTimer.toString()}
+                  onValueChange={(value) => setAutoDeleteTimer(parseInt(value))}
+                >
+                  <SelectTrigger id="timer-select" data-testid="select-timer">
+                    <SelectValue placeholder="Select timer duration" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="5">5 seconds</SelectItem>
+                    <SelectItem value="10">10 seconds</SelectItem>
+                    <SelectItem value="15">15 seconds</SelectItem>
+                    <SelectItem value="30">30 seconds</SelectItem>
+                    <SelectItem value="60">1 minute</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-muted-foreground">
+                  How long before auto-delete starts after copying
+                </p>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Add padding at bottom to account for RecordingBar */}
       <div className="h-20" />
     </div>
