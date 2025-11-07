@@ -9,7 +9,7 @@ import { ImageGallery } from "@/components/ImageGallery";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { Trash2, FileText, Loader2, Settings } from "lucide-react";
+import { Trash2, FileText, Loader2, Settings, Download } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,6 +44,7 @@ export default function Home() {
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
   
   // Settings with localStorage persistence
@@ -327,6 +328,196 @@ export default function Home() {
     }
   }, [deleteCountdown]);
 
+  const escapeHtml = (text: string): string => {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  };
+
+  const handleExportHTML = async () => {
+    if (timeline.length === 0) {
+      toast({
+        title: "Nothing to export",
+        description: "Add some images or transcriptions first",
+      });
+      return;
+    }
+
+    setIsExporting(true);
+
+    try {
+      // Convert images to base64
+      const timelineWithBase64 = await Promise.all(
+        timeline.map(async (item) => {
+          if (item.type === 'image') {
+            try {
+              const response = await fetch(item.data.objectPath);
+              const blob = await response.blob();
+              const base64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.readAsDataURL(blob);
+              });
+              return { ...item, base64 };
+            } catch (error) {
+              console.error("Failed to fetch image:", error);
+              return item;
+            }
+          }
+          return item;
+        })
+      );
+
+      // Generate HTML
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ImageDrop Export - ${new Date().toLocaleDateString()}</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #2563eb;
+      margin-bottom: 10px;
+      font-size: 2em;
+    }
+    .header {
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 20px;
+      margin-bottom: 30px;
+    }
+    .export-date {
+      color: #6b7280;
+      font-size: 0.9em;
+    }
+    .timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .timeline-item {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+      background: white;
+    }
+    .timeline-item img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    .item-content {
+      padding: 16px;
+    }
+    .transcription-item {
+      background: #f9fafb;
+      padding: 16px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+    }
+    .transcription-text {
+      white-space: pre-wrap;
+      margin-bottom: 12px;
+      font-size: 0.95em;
+    }
+    .timestamp {
+      color: #6b7280;
+      font-size: 0.85em;
+      margin-top: 8px;
+    }
+    .filename {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    @media print {
+      body {
+        background: white;
+        padding: 0;
+      }
+      .container {
+        box-shadow: none;
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>ImageDrop Export</h1>
+      <p class="export-date">Exported on ${new Date().toLocaleString()}</p>
+      <p class="export-date">${timeline.length} ${timeline.length === 1 ? 'item' : 'items'} total</p>
+    </div>
+    <div class="timeline">
+${timelineWithBase64.map((item) => {
+  if (item.type === 'image') {
+    const base64 = 'base64' in item ? item.base64 : '';
+    return `      <div class="timeline-item">
+        ${base64 ? `<img src="${base64}" alt="${escapeHtml(item.data.fileName)}">` : ''}
+        <div class="item-content">
+          <p class="filename">${escapeHtml(item.data.fileName)}</p>
+          <p class="timestamp">${escapeHtml(new Date(item.data.uploadedAt).toLocaleDateString() + ' ' + new Date(item.data.uploadedAt).toLocaleTimeString())}</p>
+        </div>
+      </div>`;
+  } else {
+    return `      <div class="transcription-item">
+        <div class="transcription-text">${escapeHtml(item.data.text)}</div>
+        <p class="timestamp">${escapeHtml(new Date(item.data.createdAt).toLocaleDateString() + ' ' + new Date(item.data.createdAt).toLocaleTimeString())}</p>
+      </div>`;
+  }
+}).join('\n')}
+    </div>
+  </div>
+</body>
+</html>`;
+
+      // Create and download file
+      const blob = new Blob([html], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `notes-${new Date().toISOString().split('T')[0]}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "Export complete!",
+        description: "HTML file has been downloaded",
+      });
+    } catch (error) {
+      console.error("Export error:", error);
+      toast({
+        title: "Export failed",
+        description: "Could not export to HTML. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -351,30 +542,51 @@ export default function Home() {
               <Settings className="w-4 h-4" />
             </Button>
             {timeline.length > 0 && (
-              <Button
-                variant={deleteCountdown !== null ? "outline" : "destructive"}
-                size="sm"
-                onClick={() => {
-                  if (deleteCountdown !== null) {
-                    cancelDeleteCountdown();
-                  } else {
-                    setDeleteAllDialogOpen(true);
-                  }
-                }}
-                data-testid="button-delete-all"
-              >
-                {deleteCountdown !== null ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Cancel ({deleteCountdown}s)
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Delete All
-                  </>
-                )}
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleExportHTML}
+                  disabled={isExporting}
+                  data-testid="button-export-html"
+                >
+                  {isExporting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Exporting...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4 mr-2" />
+                      Export HTML
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant={deleteCountdown !== null ? "outline" : "destructive"}
+                  size="sm"
+                  onClick={() => {
+                    if (deleteCountdown !== null) {
+                      cancelDeleteCountdown();
+                    } else {
+                      setDeleteAllDialogOpen(true);
+                    }
+                  }}
+                  data-testid="button-delete-all"
+                >
+                  {deleteCountdown !== null ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Cancel ({deleteCountdown}s)
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete All
+                    </>
+                  )}
+                </Button>
+              </>
             )}
           </div>
         </div>
