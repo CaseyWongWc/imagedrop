@@ -7,7 +7,7 @@ ImageDrop is a single-page image hosting application that enables users to uploa
 **Recent Updates** (November 2025):
 - **HTML Export**: Export all images and transcriptions as a standalone HTML file with embedded base64 images - works offline, perfect for mobile-to-laptop workflow
 - **Settings Panel**: Configurable auto-delete with toggle and customizable timer (5s-60s), persisted to localStorage
-- **Enhanced Camera Quality**: 1920x1080 resolution for clearer board text capture
+- **Maximum Camera Quality**: 4K resolution (3840x2160) with continuous autofocus, exposure, and white balance - automatically negotiates to highest device capability
 - **Camera Zoom**: Digital zoom slider (1x-3x) with hardware zoom support when available, CSS fallback
 - **Improved Toast UX**: Semi-transparent toasts with backdrop blur, auto-dismiss after 4 seconds
 - **HEIC/HEIF Support**: Automatic client-side conversion of iPhone HEIC/HEIF images to PNG using heic2any library
