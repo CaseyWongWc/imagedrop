@@ -3,7 +3,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Camera, X, RefreshCw, Zap, RotateCw } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { Camera, X, RefreshCw, Zap, RotateCw, ZoomIn } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface CameraCaptureProps {
@@ -17,6 +18,7 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [captured, setCaptured] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+  const [zoom, setZoom] = useState(1);
   const [continuousMode, setContinuousMode] = useState(() => {
     // Load saved preference from localStorage
     const saved = localStorage.getItem("camera-continuous-mode");
@@ -39,6 +41,23 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
     localStorage.setItem("camera-continuous-mode", continuousMode.toString());
   }, [continuousMode]);
 
+  // Apply zoom when it changes
+  useEffect(() => {
+    if (!stream) return;
+    
+    const videoTrack = stream.getVideoTracks()[0];
+    if (!videoTrack) return;
+
+    const capabilities = videoTrack.getCapabilities() as any;
+    if (capabilities.zoom) {
+      videoTrack.applyConstraints({
+        advanced: [{ zoom: zoom } as any]
+      }).catch(() => {
+        // Zoom not supported, will use CSS instead
+      });
+    }
+  }, [zoom, stream]);
+
   useEffect(() => {
     let currentStream: MediaStream | null = null;
 
@@ -47,7 +66,11 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
 
       try {
         const mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode },
+          video: {
+            facingMode,
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
           audio: false,
         });
 
@@ -55,6 +78,19 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
         setStream(mediaStream);
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
+        }
+
+        // Try to apply zoom if supported
+        const videoTrack = mediaStream.getVideoTracks()[0];
+        const capabilities = videoTrack.getCapabilities() as any;
+        if (capabilities.zoom) {
+          try {
+            await videoTrack.applyConstraints({
+              advanced: [{ zoom: zoom } as any]
+            });
+          } catch (e) {
+            // Zoom not supported on this device, use CSS zoom instead
+          }
         }
       } catch (error) {
         toast({
@@ -204,6 +240,26 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
                 data-testid="switch-orientation"
               />
             </div>
+
+            {/* Zoom slider */}
+            {!captured && (
+              <div className="p-3 bg-muted/50 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <ZoomIn className="w-4 h-4 text-muted-foreground" />
+                  <Label className="min-w-12">Zoom</Label>
+                  <Slider
+                    value={[zoom]}
+                    onValueChange={(values) => setZoom(values[0])}
+                    min={1}
+                    max={3}
+                    step={0.1}
+                    className="flex-1"
+                    data-testid="slider-zoom"
+                  />
+                  <span className="text-sm text-muted-foreground min-w-8">{zoom.toFixed(1)}x</span>
+                </div>
+              </div>
+            )}
           </div>
           <div className="relative w-full bg-muted rounded-lg overflow-hidden aspect-video md:aspect-video">
             <div 
@@ -215,6 +271,7 @@ export function CameraCapture({ open, onClose, onCapture }: CameraCaptureProps) 
                   autoPlay
                   playsInline
                   className="w-full h-full object-cover"
+                  style={{ transform: `scale(${zoom})` }}
                   data-testid="video-camera"
                 />
               ) : (

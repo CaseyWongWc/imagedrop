@@ -4,9 +4,12 @@
 
 ImageDrop is a single-page image hosting application that enables users to upload, manage, and share images instantly. The application provides multiple upload methods (drag-and-drop, file browsing, clipboard paste, and camera capture) with a clean, minimal interface inspired by Imgur and Postimages. Users receive shareable URLs immediately upon upload for easy embedding anywhere online.
 
-**Recent Updates** (October 2025):
+**Recent Updates** (November 2025):
+- **Settings Panel**: Configurable auto-delete with toggle and customizable timer (5s-60s), persisted to localStorage
+- **Enhanced Camera Quality**: 1920x1080 resolution for clearer board text capture
+- **Camera Zoom**: Digital zoom slider (1x-3x) with hardware zoom support when available, CSS fallback
+- **Improved Toast UX**: Semi-transparent toasts with backdrop blur, auto-dismiss after 4 seconds
 - **HEIC/HEIF Support**: Automatic client-side conversion of iPhone HEIC/HEIF images to PNG using heic2any library
-- **Extended Auto-Delete Timer**: Countdown increased to 10 seconds for better workflow with simultaneous photo/audio capture
 - **Continuous Capture Mode**: Toggle switch enables rapid-fire photo taking that auto-uploads each shot while keeping camera open
 - **Real-Time Sync**: Gallery auto-refreshes every 3 seconds for immediate updates
 - **Bulk Management**: Delete All button with confirmation dialog removes all images and cloud storage objects as well as transcriptions
