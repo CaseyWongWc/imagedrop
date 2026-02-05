@@ -5,7 +5,7 @@ import { storage } from "./storage";
 import {
   ObjectStorageService,
   ObjectNotFoundError,
-} from "./objectStorage";
+} from "./replit_integrations/object_storage";
 import { 
   insertImageSchema, 
   insertTranscriptionSchema, 
