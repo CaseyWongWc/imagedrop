@@ -98,6 +98,13 @@ export default function Home() {
   const lastActivityRef = useRef<Date>(new Date());
   const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nativeCameraRef = useRef<HTMLInputElement>(null);
+  
+  // Detect mobile for native camera usage (SSR-safe)
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    setIsMobile(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
+  }, []);
 
   // Save settings to localStorage
   useEffect(() => {
@@ -729,55 +736,81 @@ export default function Home() {
         }}
         data-testid="input-file-upload"
       />
+      
+      {/* Native camera input for mobile - uses device camera app with full controls */}
+      <input
+        type="file"
+        ref={nativeCameraRef}
+        className="hidden"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            handleFileUpload(Array.from(e.target.files));
+            e.target.value = ""; // Reset so same file can be selected again
+          }
+        }}
+        data-testid="input-native-camera"
+      />
 
       {/* Bottom Action Bar */}
       <div className="fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur z-40">
-        <div className="container max-w-4xl mx-auto px-4 py-3 flex items-center justify-center gap-3">
+        <div className="container max-w-4xl mx-auto px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-center gap-1 sm:gap-3">
           <Button
-            size="lg"
+            size="sm"
             className="gap-2"
-            onClick={() => setCameraOpen(true)}
+            onClick={() => {
+              if (isMobile) {
+                nativeCameraRef.current?.click();
+              } else {
+                setCameraOpen(true);
+              }
+            }}
             disabled={isUploading}
+            aria-label="Take photo"
             data-testid="button-camera"
           >
-            {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}
-            Photo
+            {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
+            <span className="hidden sm:inline">Photo</span>
           </Button>
           <Button
-            size="lg"
+            size="sm"
             variant="outline"
             className="gap-2"
             onClick={() => fileInputRef.current?.click()}
             disabled={isUploading}
+            aria-label="Upload photo"
             data-testid="button-upload"
           >
-            {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
-            Upload
+            {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            <span className="hidden sm:inline">Upload</span>
           </Button>
           <Button
-            size="lg"
+            size="sm"
             variant="outline"
             className="gap-2"
             onClick={() => setIsRecordingRequested(true)}
+            aria-label="Start recording"
             data-testid="button-record"
           >
-            <Mic className="w-5 h-5" />
-            Record
+            <Mic className="w-4 h-4" />
+            <span className="hidden sm:inline">Record</span>
           </Button>
           <Button
-            size="lg"
+            size="sm"
             variant="outline"
             className="gap-2"
             onClick={() => createCheckpointMutation.mutate(undefined)}
             disabled={createCheckpointMutation.isPending}
+            aria-label="Create checkpoint"
             data-testid="button-checkpoint"
           >
             {createCheckpointMutation.isPending ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
+              <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <Flag className="w-5 h-5" />
+              <Flag className="w-4 h-4" />
             )}
-            Checkpoint
+            <span className="hidden sm:inline">Checkpoint</span>
           </Button>
         </div>
       </div>
