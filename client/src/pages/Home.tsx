@@ -27,7 +27,15 @@ import {
   Mic,
   FolderOpen,
   Upload,
+  Image as ImageIcon,
+  FileText,
 } from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -75,6 +83,7 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isRecordingRequested, setIsRecordingRequested] = useState(false);
+  const [mediaPickerOpen, setMediaPickerOpen] = useState(false);
   
   // Display controls with localStorage persistence
   const [fontSize, setFontSize] = useState(() => {
@@ -97,8 +106,8 @@ export default function Home() {
   });
   const lastActivityRef = useRef<Date>(new Date());
   const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const nativeCameraRef = useRef<HTMLInputElement>(null);
+  const photosInputRef = useRef<HTMLInputElement>(null);
   
   // Detect mobile for native camera usage (SSR-safe)
   const [isMobile, setIsMobile] = useState(false);
@@ -721,23 +730,7 @@ export default function Home() {
         )}
       </main>
 
-      {/* Hidden file input for gallery upload */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        className="hidden"
-        accept="image/*,.heic,.heif"
-        multiple
-        onChange={(e) => {
-          if (e.target.files && e.target.files.length > 0) {
-            handleFileUpload(Array.from(e.target.files));
-            e.target.value = ""; // Reset so same file can be selected again
-          }
-        }}
-        data-testid="input-file-upload"
-      />
-      
-      {/* Native camera input for mobile - uses device camera app with full controls */}
+      {/* Hidden inputs for media picker */}
       <input
         type="file"
         ref={nativeCameraRef}
@@ -747,57 +740,55 @@ export default function Home() {
         onChange={(e) => {
           if (e.target.files && e.target.files.length > 0) {
             handleFileUpload(Array.from(e.target.files));
-            e.target.value = ""; // Reset so same file can be selected again
+            e.target.value = "";
+            setMediaPickerOpen(false);
           }
         }}
         data-testid="input-native-camera"
       />
+      <input
+        type="file"
+        ref={photosInputRef}
+        className="hidden"
+        accept="image/*,.heic,.heif"
+        multiple
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            handleFileUpload(Array.from(e.target.files));
+            e.target.value = "";
+            setMediaPickerOpen(false);
+          }
+        }}
+        data-testid="input-photos"
+      />
 
       {/* Bottom Action Bar */}
       <div className="fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur z-40">
-        <div className="container max-w-4xl mx-auto px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-center gap-1 sm:gap-3">
+        <div className="container max-w-4xl mx-auto px-4 py-3 flex items-center justify-center gap-3">
           <Button
-            size="sm"
+            size="lg"
             className="gap-2"
-            onClick={() => {
-              if (isMobile) {
-                nativeCameraRef.current?.click();
-              } else {
-                setCameraOpen(true);
-              }
-            }}
+            onClick={() => setMediaPickerOpen(true)}
             disabled={isUploading}
-            aria-label="Take photo"
-            data-testid="button-camera"
+            aria-label="Add media"
+            data-testid="button-add"
           >
-            {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4" />}
-            <span className="hidden sm:inline">Photo</span>
+            {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
+            Add
           </Button>
           <Button
-            size="sm"
-            variant="outline"
-            className="gap-2"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-            aria-label="Upload photo"
-            data-testid="button-upload"
-          >
-            {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            <span className="hidden sm:inline">Upload</span>
-          </Button>
-          <Button
-            size="sm"
+            size="lg"
             variant="outline"
             className="gap-2"
             onClick={() => setIsRecordingRequested(true)}
             aria-label="Start recording"
             data-testid="button-record"
           >
-            <Mic className="w-4 h-4" />
-            <span className="hidden sm:inline">Record</span>
+            <Mic className="w-5 h-5" />
+            Record
           </Button>
           <Button
-            size="sm"
+            size="lg"
             variant="outline"
             className="gap-2"
             onClick={() => createCheckpointMutation.mutate(undefined)}
@@ -806,14 +797,57 @@ export default function Home() {
             data-testid="button-checkpoint"
           >
             {createCheckpointMutation.isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Loader2 className="w-5 h-5 animate-spin" />
             ) : (
-              <Flag className="w-4 h-4" />
+              <Flag className="w-5 h-5" />
             )}
-            <span className="hidden sm:inline">Checkpoint</span>
+            Checkpoint
           </Button>
         </div>
       </div>
+
+      {/* Media Picker Bottom Sheet */}
+      <Sheet open={mediaPickerOpen} onOpenChange={setMediaPickerOpen}>
+        <SheetContent side="bottom" className="rounded-t-xl">
+          <SheetHeader className="pb-4">
+            <SheetTitle>Add to notebook</SheetTitle>
+          </SheetHeader>
+          <div className="flex flex-wrap justify-center gap-6 pb-6">
+            <Button
+              variant="outline"
+              size="lg"
+              className="flex-col gap-2"
+              onClick={() => {
+                setMediaPickerOpen(false);
+                if (isMobile) {
+                  setTimeout(() => nativeCameraRef.current?.click(), 100);
+                } else {
+                  setCameraOpen(true);
+                }
+              }}
+              aria-label="Open camera"
+              data-testid="picker-camera"
+            >
+              <Camera className="w-6 h-6" />
+              <span className="text-xs">Camera</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="lg"
+              className="flex-col gap-2"
+              onClick={() => {
+                setMediaPickerOpen(false);
+                setTimeout(() => photosInputRef.current?.click(), 100);
+              }}
+              aria-label="Choose from photos"
+              data-testid="picker-photos"
+            >
+              <ImageIcon className="w-6 h-6" />
+              <span className="text-xs">Photos</span>
+            </Button>
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* Camera Modal */}
       <CameraCapture
