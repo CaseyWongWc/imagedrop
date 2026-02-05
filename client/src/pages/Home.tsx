@@ -26,6 +26,7 @@ import {
   Camera,
   Mic,
   FolderOpen,
+  Upload,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -96,6 +97,7 @@ export default function Home() {
   });
   const lastActivityRef = useRef<Date>(new Date());
   const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Save settings to localStorage
   useEffect(() => {
@@ -679,6 +681,22 @@ export default function Home() {
         )}
       </main>
 
+      {/* Hidden file input for gallery upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept="image/*,.heic,.heif"
+        multiple
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            handleFileUpload(Array.from(e.target.files));
+            e.target.value = ""; // Reset so same file can be selected again
+          }
+        }}
+        data-testid="input-file-upload"
+      />
+
       {/* Bottom Action Bar */}
       <div className="fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur z-40">
         <div className="container max-w-4xl mx-auto px-4 py-3 flex items-center justify-center gap-3">
@@ -691,6 +709,17 @@ export default function Home() {
           >
             {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}
             Photo
+          </Button>
+          <Button
+            size="lg"
+            variant="outline"
+            className="gap-2"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            data-testid="button-upload"
+          >
+            {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
+            Upload
           </Button>
           <Button
             size="lg"
