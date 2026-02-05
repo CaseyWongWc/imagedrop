@@ -240,8 +240,8 @@ export function RecordingBar({ notebookId, onTranscribed, isRecordingRequested, 
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 border-t bg-red-500/10 backdrop-blur supports-[backdrop-filter]:bg-red-500/5 z-50">
-      <div className="container max-w-7xl mx-auto px-4 py-3">
+    <div className="fixed bottom-16 left-0 right-0 border-t border-b bg-red-500/10 backdrop-blur supports-[backdrop-filter]:bg-red-500/5 z-50">
+      <div className="container max-w-7xl mx-auto px-4 py-2">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-yellow-500' : 'bg-red-500 animate-pulse'}`} />
