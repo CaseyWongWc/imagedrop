@@ -1,15 +1,32 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Image, InsertImage, Transcription } from "@shared/schema";
+import type { Notebook, Image, InsertImage, TimelineItem } from "@shared/schema";
 import { UploadZone } from "@/components/UploadZone";
 import { CameraCapture } from "@/components/CameraCapture";
 import { RecordingBar } from "@/components/RecordingBar";
-import { ImageGallery } from "@/components/ImageGallery";
 import { useToast } from "@/hooks/use-toast";
-import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { Trash2, FileText, Loader2, Settings, Download } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import {
+  Trash2,
+  Plus,
+  Download,
+  Loader2,
+  Settings,
+  BookOpen,
+  Flag,
+  ZoomIn,
+  ZoomOut,
+  Type,
+  Camera,
+  Mic,
+  FolderOpen,
+} from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,9 +43,8 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -36,60 +52,121 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import heic2any from "heic2any";
 
 export default function Home() {
+  const { toast } = useToast();
+  
+  // Notebook state
+  const [selectedNotebookId, setSelectedNotebookId] = useState<string | null>(() => {
+    return localStorage.getItem("selected-notebook-id");
+  });
+  const [createNotebookOpen, setCreateNotebookOpen] = useState(false);
+  const [newNotebookTitle, setNewNotebookTitle] = useState("");
+  const [newNotebookClass, setNewNotebookClass] = useState("");
+  
+  // UI state
   const [cameraOpen, setCameraOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [deleteCountdown, setDeleteCountdown] = useState<number | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [isRecordingRequested, setIsRecordingRequested] = useState(false);
   
-  // Settings with localStorage persistence
-  const [autoDeleteEnabled, setAutoDeleteEnabled] = useState(() => {
-    const saved = localStorage.getItem("auto-delete-enabled");
+  // Display controls with localStorage persistence
+  const [fontSize, setFontSize] = useState(() => {
+    const saved = localStorage.getItem("font-size");
+    return saved ? parseInt(saved) : 14;
+  });
+  const [photoScale, setPhotoScale] = useState(() => {
+    const saved = localStorage.getItem("photo-scale");
+    return saved ? parseInt(saved) : 100;
+  });
+  
+  // Auto checkpoint timer
+  const [autoCheckpointEnabled, setAutoCheckpointEnabled] = useState(() => {
+    const saved = localStorage.getItem("auto-checkpoint-enabled");
     return saved === "true";
   });
-  const [autoDeleteTimer, setAutoDeleteTimer] = useState(() => {
-    const saved = localStorage.getItem("auto-delete-timer");
-    return saved ? parseInt(saved) : 10;
+  const [autoCheckpointMinutes, setAutoCheckpointMinutes] = useState(() => {
+    const saved = localStorage.getItem("auto-checkpoint-minutes");
+    return saved ? parseInt(saved) : 5;
   });
-  
-  const { toast } = useToast();
+  const lastActivityRef = useRef<Date>(new Date());
+  const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Save settings to localStorage
   useEffect(() => {
-    localStorage.setItem("auto-delete-enabled", autoDeleteEnabled.toString());
-  }, [autoDeleteEnabled]);
+    localStorage.setItem("font-size", fontSize.toString());
+  }, [fontSize]);
 
   useEffect(() => {
-    localStorage.setItem("auto-delete-timer", autoDeleteTimer.toString());
-  }, [autoDeleteTimer]);
+    localStorage.setItem("photo-scale", photoScale.toString());
+  }, [photoScale]);
 
-  const { data: imagesData = [], isLoading } = useQuery<Image[]>({
-    queryKey: ["/api/images"],
-    refetchInterval: 3000, // Auto-refresh every 3 seconds
+  useEffect(() => {
+    localStorage.setItem("auto-checkpoint-enabled", autoCheckpointEnabled.toString());
+  }, [autoCheckpointEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("auto-checkpoint-minutes", autoCheckpointMinutes.toString());
+  }, [autoCheckpointMinutes]);
+
+  useEffect(() => {
+    if (selectedNotebookId) {
+      localStorage.setItem("selected-notebook-id", selectedNotebookId);
+    } else {
+      localStorage.removeItem("selected-notebook-id");
+    }
+  }, [selectedNotebookId]);
+
+  // Queries
+  const { data: notebooks = [], isLoading: isLoadingNotebooks } = useQuery<Notebook[]>({
+    queryKey: ["/api/notebooks"],
   });
 
-  const { data: transcriptionsData = [], isLoading: isLoadingTranscriptions } = useQuery<Transcription[]>({
-    queryKey: ["/api/transcriptions"],
-    refetchInterval: 3000, // Auto-refresh every 3 seconds
+  const { data: timeline = [], isLoading: isLoadingTimeline } = useQuery<TimelineItem[]>({
+    queryKey: ["/api/notebooks", selectedNotebookId, "timeline"],
+    enabled: !!selectedNotebookId,
   });
 
-  // Merge images and transcriptions into a chronological timeline
-  type TimelineItem = 
-    | { type: 'image'; data: Image }
-    | { type: 'transcription'; data: Transcription };
+  // Find selected notebook
+  const selectedNotebook = notebooks.find(n => n.id === selectedNotebookId);
 
-  const timeline: TimelineItem[] = [
-    ...imagesData.map(img => ({ type: 'image' as const, data: img })),
-    ...transcriptionsData.map(trans => ({ type: 'transcription' as const, data: trans }))
-  ].sort((a, b) => {
-    const timeA = a.type === 'image' ? new Date(a.data.uploadedAt).getTime() : new Date(a.data.createdAt).getTime();
-    const timeB = b.type === 'image' ? new Date(b.data.uploadedAt).getTime() : new Date(b.data.createdAt).getTime();
-    return timeA - timeB; // oldest first
+  // Mutations
+  const createNotebookMutation = useMutation({
+    mutationFn: async (data: { title: string; className?: string }) => {
+      return await apiRequest("POST", "/api/notebooks", data);
+    },
+    onSuccess: async (res) => {
+      const notebook = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks"] });
+      setSelectedNotebookId(notebook.id);
+      setCreateNotebookOpen(false);
+      setNewNotebookTitle("");
+      setNewNotebookClass("");
+      toast({
+        title: "Notebook created",
+        description: `"${notebook.title}" is ready`,
+      });
+    },
+  });
+
+  const deleteNotebookMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return await apiRequest("DELETE", `/api/notebooks/${id}`, undefined);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks"] });
+      setSelectedNotebookId(null);
+      setDeleteAllDialogOpen(false);
+      toast({
+        title: "Notebook deleted",
+        description: "All content has been removed",
+      });
+    },
   });
 
   const uploadMutation = useMutation({
@@ -97,54 +174,63 @@ export default function Home() {
       return await apiRequest("POST", "/api/images", imageData);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/images"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", selectedNotebookId, "timeline"] });
+      lastActivityRef.current = new Date();
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      return await apiRequest("DELETE", `/api/images/${id}`, undefined);
+  const createCheckpointMutation = useMutation({
+    mutationFn: async (label?: string) => {
+      return await apiRequest("POST", "/api/checkpoints", {
+        notebookId: selectedNotebookId,
+        label,
+      });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/images"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", selectedNotebookId, "timeline"] });
       toast({
-        title: "Image deleted",
-        description: "Image has been removed from your gallery",
+        title: "Checkpoint saved",
+        description: new Date().toLocaleTimeString(),
       });
     },
   });
 
-  const deleteAllMutation = useMutation({
-    mutationFn: async () => {
-      return await apiRequest("DELETE", "/api/images", undefined);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/images"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/transcriptions"] });
-      setDeleteAllDialogOpen(false);
-      toast({
-        title: "All content deleted",
-        description: "Your gallery and transcriptions have been cleared",
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Delete failed",
-        description: "Could not delete content. Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
+  // Auto checkpoint timer
+  useEffect(() => {
+    if (!autoCheckpointEnabled || !selectedNotebookId) {
+      if (checkpointTimerRef.current) {
+        clearInterval(checkpointTimerRef.current);
+      }
+      return;
+    }
 
+    const checkInterval = setInterval(() => {
+      const now = new Date();
+      const minutesSinceActivity = (now.getTime() - lastActivityRef.current.getTime()) / 1000 / 60;
+      
+      if (minutesSinceActivity >= autoCheckpointMinutes) {
+        createCheckpointMutation.mutate("Auto checkpoint");
+        lastActivityRef.current = now;
+      }
+    }, 60000); // Check every minute
+
+    checkpointTimerRef.current = checkInterval;
+
+    return () => {
+      if (checkpointTimerRef.current) {
+        clearInterval(checkpointTimerRef.current);
+      }
+    };
+  }, [autoCheckpointEnabled, autoCheckpointMinutes, selectedNotebookId]);
+
+  // Helper functions
   const convertHeicToPng = async (file: File): Promise<File> => {
     const isHeic = file.name.toLowerCase().endsWith('.heic') || 
                    file.name.toLowerCase().endsWith('.heif') ||
                    file.type === 'image/heic' ||
                    file.type === 'image/heif';
     
-    if (!isHeic) {
-      return file;
-    }
+    if (!isHeic) return file;
 
     try {
       const convertedBlob = await heic2any({
@@ -152,10 +238,8 @@ export default function Home() {
         toType: "image/png",
         quality: 0.9,
       });
-
       const blob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
       const newFileName = file.name.replace(/\.heic$/i, '.png').replace(/\.heif$/i, '.png');
-      
       return new File([blob], newFileName, {
         type: "image/png",
         lastModified: Date.now(),
@@ -166,7 +250,22 @@ export default function Home() {
     }
   };
 
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  };
+
   const handleFileUpload = async (files: File[]) => {
+    if (!selectedNotebookId) {
+      toast({
+        title: "No notebook selected",
+        description: "Please select or create a notebook first",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsUploading(true);
 
     try {
@@ -175,28 +274,22 @@ export default function Home() {
         
         try {
           processedFile = await convertHeicToPng(file);
-        } catch (conversionError) {
+        } catch {
           toast({
             title: "Conversion failed",
-            description: "Could not convert HEIC/HEIF file. Please try a different format.",
+            description: "Could not convert HEIC/HEIF file",
             variant: "destructive",
           });
           continue;
         }
 
-        const uploadUrlRes = await apiRequest(
-          "POST",
-          "/api/objects/upload",
-          undefined
-        );
+        const uploadUrlRes = await apiRequest("POST", "/api/objects/upload", undefined);
         const uploadUrlData = await uploadUrlRes.json() as { uploadURL: string };
 
         await fetch(uploadUrlData.uploadURL, {
           method: "PUT",
           body: processedFile,
-          headers: {
-            "Content-Type": processedFile.type,
-          },
+          headers: { "Content-Type": processedFile.type },
         });
 
         const url = new URL(uploadUrlData.uploadURL);
@@ -204,6 +297,7 @@ export default function Home() {
 
         const imageData: InsertImage = {
           id: objectId,
+          notebookId: selectedNotebookId,
           objectPath: `/objects/uploads/${objectId}`,
           fileName: processedFile.name,
           fileSize: formatFileSize(processedFile.size),
@@ -216,7 +310,7 @@ export default function Home() {
         await navigator.clipboard.writeText(fullUrl);
 
         toast({
-          title: "Image uploaded!",
+          title: "Photo captured!",
           description: "Link copied to clipboard",
         });
       }
@@ -232,113 +326,11 @@ export default function Home() {
     }
   };
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-  };
-
-  const handleSelectAllTimestamps = () => {
-    const selection = window.getSelection();
-    const range = document.createRange();
-    
-    // Find the timeline container
-    const timelineContainer = document.querySelector('[data-testid="timeline-container"]');
-    
-    if (!timelineContainer) return;
-    
-    const firstElement = timelineContainer.firstElementChild;
-    const lastElement = timelineContainer.lastElementChild;
-    
-    if (firstElement && lastElement) {
-      range.setStartBefore(firstElement);
-      range.setEndAfter(lastElement);
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      
-      toast({
-        title: "Text selected",
-        description: autoDeleteEnabled ? `Press Ctrl+C to copy, auto-delete in ${autoDeleteTimer}s` : "Press Ctrl+C to copy",
-      });
-    }
-  };
-
-  const startDeleteCountdown = () => {
-    if (!autoDeleteEnabled) return; // Don't start countdown if disabled
-    
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-    }
-    
-    setDeleteCountdown(autoDeleteTimer);
-    
-    const interval = setInterval(() => {
-      setDeleteCountdown(prev => {
-        if (prev === null || prev <= 1) {
-          clearInterval(interval);
-          deleteAllMutation.mutate();
-          return null;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    
-    countdownTimerRef.current = interval;
-  };
-
-  const cancelDeleteCountdown = () => {
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-      countdownTimerRef.current = null;
-    }
-    setDeleteCountdown(null);
-    toast({
-      title: "Auto-delete cancelled",
-      description: "Your images are safe",
-    });
-  };
-
-  useEffect(() => {
-    const handleCopy = (e: ClipboardEvent) => {
-      const selection = window.getSelection();
-      const selectedText = selection?.toString();
-      
-      // Check if any timestamp text from images is being copied
-      if (selectedText && selectedText.includes('image.png')) {
-        // Add a small delay to ensure clipboard operation completes
-        setTimeout(() => {
-          startDeleteCountdown();
-        }, 200);
-      }
-    };
-
-    document.addEventListener("copy", handleCopy);
-    return () => {
-      document.removeEventListener("copy", handleCopy);
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
-      }
-    };
-  }, [autoDeleteEnabled, autoDeleteTimer]);
-
-  useEffect(() => {
-    if (deleteCountdown === null && countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-      countdownTimerRef.current = null;
-    }
-  }, [deleteCountdown]);
-
-  const escapeHtml = (text: string): string => {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  };
-
-  const handleExportHTML = async () => {
+  const handleExportLinks = async () => {
     if (timeline.length === 0) {
       toast({
         title: "Nothing to export",
-        description: "Add some images or transcriptions first",
+        description: "Add some content first",
       });
       return;
     }
@@ -346,157 +338,31 @@ export default function Home() {
     setIsExporting(true);
 
     try {
-      // Convert images to base64
-      const timelineWithBase64 = await Promise.all(
-        timeline.map(async (item) => {
-          if (item.type === 'image') {
-            try {
-              const response = await fetch(item.data.objectPath);
-              const blob = await response.blob();
-              const base64 = await new Promise<string>((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.readAsDataURL(blob);
-              });
-              return { ...item, base64 };
-            } catch (error) {
-              console.error("Failed to fetch image:", error);
-              return item;
-            }
+      const baseUrl = window.location.origin;
+      
+      const markdown = `# ${selectedNotebook?.title || "Notebook"}\n\n${
+        selectedNotebook?.className ? `**Class:** ${selectedNotebook.className}\n\n` : ""
+      }**Exported:** ${new Date().toLocaleString()}\n\n---\n\n${
+        timeline.map((item) => {
+          const timestamp = new Date(item.timestamp).toLocaleString();
+          if (item.type === "image") {
+            const img = item.content as Image;
+            return `### ${timestamp}\n\n![${img.fileName}](${baseUrl}${img.objectPath})\n`;
+          } else if (item.type === "transcription") {
+            const trans = item.content as { text: string };
+            return `### ${timestamp}\n\n${trans.text}\n`;
+          } else {
+            const cp = item.content as { label?: string };
+            return `---\n\n**Checkpoint${cp.label ? `: ${cp.label}` : ""}** - ${timestamp}\n\n---\n`;
           }
-          return item;
-        })
-      );
+        }).join("\n")
+      }`;
 
-      // Generate HTML
-      const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ImageDrop Export - ${new Date().toLocaleDateString()}</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-      line-height: 1.6;
-      color: #333;
-      background: #f5f5f5;
-      padding: 20px;
-    }
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      background: white;
-      padding: 30px;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    h1 {
-      color: #2563eb;
-      margin-bottom: 10px;
-      font-size: 2em;
-    }
-    .header {
-      border-bottom: 2px solid #e5e7eb;
-      padding-bottom: 20px;
-      margin-bottom: 30px;
-    }
-    .export-date {
-      color: #6b7280;
-      font-size: 0.9em;
-    }
-    .timeline {
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-    }
-    .timeline-item {
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      overflow: hidden;
-      background: white;
-    }
-    .timeline-item img {
-      width: 100%;
-      height: auto;
-      display: block;
-    }
-    .item-content {
-      padding: 16px;
-    }
-    .transcription-item {
-      background: #f9fafb;
-      padding: 16px;
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-    }
-    .transcription-text {
-      white-space: pre-wrap;
-      margin-bottom: 12px;
-      font-size: 0.95em;
-    }
-    .timestamp {
-      color: #6b7280;
-      font-size: 0.85em;
-      margin-top: 8px;
-    }
-    .filename {
-      font-weight: 600;
-      margin-bottom: 4px;
-    }
-    @media print {
-      body {
-        background: white;
-        padding: 0;
-      }
-      .container {
-        box-shadow: none;
-        padding: 0;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>ImageDrop Export</h1>
-      <p class="export-date">Exported on ${new Date().toLocaleString()}</p>
-      <p class="export-date">${timeline.length} ${timeline.length === 1 ? 'item' : 'items'} total</p>
-    </div>
-    <div class="timeline">
-${timelineWithBase64.map((item) => {
-  if (item.type === 'image') {
-    const base64 = 'base64' in item ? item.base64 : '';
-    return `      <div class="timeline-item">
-        ${base64 ? `<img src="${base64}" alt="${escapeHtml(item.data.fileName)}">` : ''}
-        <div class="item-content">
-          <p class="filename">${escapeHtml(item.data.fileName)}</p>
-          <p class="timestamp">${escapeHtml(new Date(item.data.uploadedAt).toLocaleDateString() + ' ' + new Date(item.data.uploadedAt).toLocaleTimeString())}</p>
-        </div>
-      </div>`;
-  } else {
-    return `      <div class="transcription-item">
-        <div class="transcription-text">${escapeHtml(item.data.text)}</div>
-        <p class="timestamp">${escapeHtml(new Date(item.data.createdAt).toLocaleDateString() + ' ' + new Date(item.data.createdAt).toLocaleTimeString())}</p>
-      </div>`;
-  }
-}).join('\n')}
-    </div>
-  </div>
-</body>
-</html>`;
-
-      // Create and download file
-      const blob = new Blob([html], { type: 'text/html' });
+      const blob = new Blob([markdown], { type: "text/markdown" });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const a = document.createElement("a");
       a.href = url;
-      a.download = `notes-${new Date().toISOString().split('T')[0]}.html`;
+      a.download = `${selectedNotebook?.title || "notebook"}-${new Date().toISOString().split("T")[0]}.md`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -504,13 +370,13 @@ ${timelineWithBase64.map((item) => {
 
       toast({
         title: "Export complete!",
-        description: "HTML file has been downloaded",
+        description: "Markdown file with photo links downloaded",
       });
     } catch (error) {
       console.error("Export error:", error);
       toast({
         title: "Export failed",
-        description: "Could not export to HTML. Please try again.",
+        description: "Please try again",
         variant: "destructive",
       });
     } finally {
@@ -518,21 +384,154 @@ ${timelineWithBase64.map((item) => {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b sticky top-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50">
-        <div className="container max-w-7xl mx-auto px-4 md:px-8 h-16 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-              <span className="text-primary-foreground font-bold text-lg">I</span>
+  const formatTime = (date: Date) => {
+    return new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
+  // No notebook selected - show notebook selector
+  if (!selectedNotebookId) {
+    return (
+      <div className="min-h-screen bg-background">
+        <header className="border-b sticky top-0 bg-background/95 backdrop-blur z-50">
+          <div className="container max-w-4xl mx-auto px-4 h-16 flex items-center">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
+                <BookOpen className="w-4 h-4 text-primary-foreground" />
+              </div>
+              <h1 className="text-xl font-bold" data-testid="text-app-title">ImageDrop V2</h1>
             </div>
-            <h1 className="text-xl font-bold" data-testid="text-app-title">ImageDrop</h1>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="text-sm text-muted-foreground" data-testid="text-image-count">
-              {timeline.length} {timeline.length === 1 ? "item" : "items"}
+        </header>
+
+        <main className="container max-w-4xl mx-auto px-4 py-8">
+          <div className="text-center mb-8">
+            <h2 className="text-2xl font-bold mb-2">Select a Notebook</h2>
+            <p className="text-muted-foreground">Choose an existing notebook or create a new one</p>
+          </div>
+
+          <div className="grid gap-4 mb-6">
+            {isLoadingNotebooks ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : notebooks.length === 0 ? (
+              <Card className="p-8 text-center">
+                <FolderOpen className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+                <p className="text-muted-foreground mb-4">No notebooks yet</p>
+                <Button onClick={() => setCreateNotebookOpen(true)} data-testid="button-create-first-notebook">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create Your First Notebook
+                </Button>
+              </Card>
+            ) : (
+              notebooks.map((notebook) => (
+                <Card
+                  key={notebook.id}
+                  className="p-4 cursor-pointer hover-elevate"
+                  onClick={() => setSelectedNotebookId(notebook.id)}
+                  data-testid={`card-notebook-${notebook.id}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-semibold">{notebook.title}</h3>
+                      {notebook.className && (
+                        <Badge variant="secondary" className="mt-1">{notebook.className}</Badge>
+                      )}
+                      <p className="text-sm text-muted-foreground mt-1">
+                        {new Date(notebook.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <BookOpen className="w-5 h-5 text-muted-foreground" />
+                  </div>
+                </Card>
+              ))
+            )}
+          </div>
+
+          {notebooks.length > 0 && (
+            <div className="text-center">
+              <Button onClick={() => setCreateNotebookOpen(true)} data-testid="button-create-notebook">
+                <Plus className="w-4 h-4 mr-2" />
+                New Notebook
+              </Button>
             </div>
+          )}
+        </main>
+
+        {/* Create Notebook Dialog */}
+        <Dialog open={createNotebookOpen} onOpenChange={setCreateNotebookOpen}>
+          <DialogContent data-testid="dialog-create-notebook">
+            <DialogHeader>
+              <DialogTitle>Create New Notebook</DialogTitle>
+              <DialogDescription>Start a new lecture capture session</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="notebook-title">Title</Label>
+                <Input
+                  id="notebook-title"
+                  placeholder="Feb 5, 2026 Lecture"
+                  value={newNotebookTitle}
+                  onChange={(e) => setNewNotebookTitle(e.target.value)}
+                  data-testid="input-notebook-title"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="notebook-class">Class (optional)</Label>
+                <Input
+                  id="notebook-class"
+                  placeholder="CS4800"
+                  value={newNotebookClass}
+                  onChange={(e) => setNewNotebookClass(e.target.value)}
+                  data-testid="input-notebook-class"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setCreateNotebookOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => createNotebookMutation.mutate({
+                  title: newNotebookTitle || `Notebook ${new Date().toLocaleDateString()}`,
+                  className: newNotebookClass || undefined,
+                })}
+                disabled={createNotebookMutation.isPending}
+                data-testid="button-confirm-create-notebook"
+              >
+                {createNotebookMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Create
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
+  // Notebook selected - show timeline
+  return (
+    <div className="min-h-screen bg-background pb-24">
+      {/* Header */}
+      <header className="border-b sticky top-0 bg-background/95 backdrop-blur z-50">
+        <div className="container max-w-4xl mx-auto px-4 h-14 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSelectedNotebookId(null)}
+              data-testid="button-back-to-notebooks"
+            >
+              <BookOpen className="w-4 h-4" />
+            </Button>
+            <div className="min-w-0">
+              <h1 className="text-sm font-semibold truncate" data-testid="text-notebook-title">
+                {selectedNotebook?.title}
+              </h1>
+              {selectedNotebook?.className && (
+                <Badge variant="outline" className="text-xs">{selectedNotebook.className}</Badge>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
             <Button
               variant="ghost"
               size="icon"
@@ -541,126 +540,137 @@ ${timelineWithBase64.map((item) => {
             >
               <Settings className="w-4 h-4" />
             </Button>
-            {timeline.length > 0 && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleExportHTML}
-                  disabled={isExporting}
-                  data-testid="button-export-html"
-                >
-                  {isExporting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Exporting...
-                    </>
-                  ) : (
-                    <>
-                      <Download className="w-4 h-4 mr-2" />
-                      Export HTML
-                    </>
-                  )}
-                </Button>
-                <Button
-                  variant={deleteCountdown !== null ? "outline" : "destructive"}
-                  size="sm"
-                  onClick={() => {
-                    if (deleteCountdown !== null) {
-                      cancelDeleteCountdown();
-                    } else {
-                      setDeleteAllDialogOpen(true);
-                    }
-                  }}
-                  data-testid="button-delete-all"
-                >
-                  {deleteCountdown !== null ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Cancel ({deleteCountdown}s)
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Delete All
-                    </>
-                  )}
-                </Button>
-              </>
-            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleExportLinks}
+              disabled={isExporting || timeline.length === 0}
+              data-testid="button-export"
+            >
+              {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setDeleteAllDialogOpen(true)}
+              data-testid="button-delete-notebook"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+        
+        {/* Controls bar */}
+        <div className="border-t bg-muted/30 px-4 py-2">
+          <div className="container max-w-4xl mx-auto flex items-center gap-4 text-sm">
+            <div className="flex items-center gap-2">
+              <Type className="w-4 h-4 text-muted-foreground" />
+              <Slider
+                value={[fontSize]}
+                onValueChange={([v]) => setFontSize(v)}
+                min={10}
+                max={24}
+                step={1}
+                className="w-20"
+                data-testid="slider-font-size"
+              />
+              <span className="text-xs text-muted-foreground w-6">{fontSize}</span>
+            </div>
+            <Separator orientation="vertical" className="h-4" />
+            <div className="flex items-center gap-2">
+              <ZoomIn className="w-4 h-4 text-muted-foreground" />
+              <Slider
+                value={[photoScale]}
+                onValueChange={([v]) => setPhotoScale(v)}
+                min={25}
+                max={100}
+                step={5}
+                className="w-20"
+                data-testid="slider-photo-scale"
+              />
+              <span className="text-xs text-muted-foreground w-8">{photoScale}%</span>
+            </div>
+            <div className="flex-1" />
+            <span className="text-xs text-muted-foreground">
+              {timeline.length} item{timeline.length !== 1 && "s"}
+            </span>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="container max-w-7xl mx-auto px-4 md:px-8 py-8 space-y-8">
-        {/* Upload Zone */}
-        <UploadZone
-          onFileSelect={handleFileUpload}
-          onOpenCamera={() => setCameraOpen(true)}
-          isUploading={isUploading}
-        />
-
-        {/* Separator */}
-        {timeline.length > 0 && (
-          <div className="flex items-center gap-4">
-            <Separator className="flex-1" />
-            <span className="text-sm text-muted-foreground font-medium">
-              Timeline
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleSelectAllTimestamps}
-              data-testid="button-select-all"
-            >
-              <FileText className="w-4 h-4 mr-2" />
-              Select All
-            </Button>
-            <Separator className="flex-1" />
+      {/* Timeline */}
+      <main className="container max-w-4xl mx-auto px-4 py-4">
+        {isLoadingTimeline ? (
+          <div className="flex justify-center py-16">
+            <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
           </div>
-        )}
-
-        {/* Timeline */}
-        {isLoading || isLoadingTranscriptions ? (
-          <div className="flex items-center justify-center py-16">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" data-testid="loading-spinner" />
+        ) : timeline.length === 0 ? (
+          <div className="text-center py-16">
+            <Camera className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
+            <h3 className="font-semibold mb-2">Ready to capture</h3>
+            <p className="text-muted-foreground text-sm mb-4">
+              Take photos and record transcripts to build your timeline
+            </p>
           </div>
         ) : (
-          <div className="space-y-4" data-testid="timeline-container">
+          <div className="space-y-3" data-testid="timeline-container" style={{ fontSize: `${fontSize}px` }}>
             {timeline.map((item) => {
-              if (item.type === 'image') {
+              if (item.type === "image") {
+                const img = item.content as Image;
                 return (
-                  <div 
-                    key={`image-${item.data.id}`}
-                    className="bg-card rounded-lg border overflow-hidden"
-                    data-testid={`card-image-${item.data.id}`}
+                  <div
+                    key={`image-${item.id}`}
+                    className="rounded-lg border overflow-hidden bg-card"
+                    data-testid={`card-image-${item.id}`}
                   >
                     <img
-                      src={item.data.objectPath}
-                      alt={item.data.fileName}
+                      src={img.objectPath}
+                      alt={img.fileName}
                       className="w-full h-auto"
+                      style={{ maxWidth: `${photoScale}%` }}
                       loading="lazy"
                     />
-                    <div className="p-4">
-                      <p className="text-sm font-medium">{item.data.fileName}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {new Date(item.data.uploadedAt).toLocaleDateString()} {new Date(item.data.uploadedAt).toLocaleTimeString()}
-                      </p>
+                    <div className="px-3 py-2 flex items-center justify-between">
+                      <span className="text-muted-foreground text-xs">
+                        {formatTime(item.timestamp)}
+                      </span>
+                      <span className="text-muted-foreground text-xs truncate max-w-[50%]">
+                        {img.fileName}
+                      </span>
                     </div>
                   </div>
                 );
-              } else {
+              } else if (item.type === "transcription") {
+                const trans = item.content as { text: string };
                 return (
-                  <div 
-                    key={`transcription-${item.data.id}`}
-                    className="p-4 bg-muted/30 rounded-lg border"
-                    data-testid={`transcription-${item.data.id}`}
+                  <div
+                    key={`trans-${item.id}`}
+                    className="p-3 bg-muted/30 rounded-lg border"
+                    data-testid={`card-transcription-${item.id}`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{item.data.text}</p>
+                    <p className="whitespace-pre-wrap">{trans.text}</p>
                     <p className="text-xs text-muted-foreground mt-2">
-                      {new Date(item.data.createdAt).toLocaleDateString()} {new Date(item.data.createdAt).toLocaleTimeString()}
+                      {formatTime(item.timestamp)}
                     </p>
+                  </div>
+                );
+              } else {
+                const cp = item.content as { label?: string };
+                return (
+                  <div
+                    key={`checkpoint-${item.id}`}
+                    className="flex items-center gap-2 py-2"
+                    data-testid={`card-checkpoint-${item.id}`}
+                  >
+                    <Separator className="flex-1" />
+                    <Badge variant="outline" className="gap-1">
+                      <Flag className="w-3 h-3" />
+                      {cp.label || "Checkpoint"}
+                      <span className="text-muted-foreground">
+                        {formatTime(item.timestamp)}
+                      </span>
+                    </Badge>
+                    <Separator className="flex-1" />
                   </div>
                 );
               }
@@ -669,6 +679,47 @@ ${timelineWithBase64.map((item) => {
         )}
       </main>
 
+      {/* Bottom Action Bar */}
+      <div className="fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur z-40">
+        <div className="container max-w-4xl mx-auto px-4 py-3 flex items-center justify-center gap-3">
+          <Button
+            size="lg"
+            className="gap-2"
+            onClick={() => setCameraOpen(true)}
+            disabled={isUploading}
+            data-testid="button-camera"
+          >
+            {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}
+            Photo
+          </Button>
+          <Button
+            size="lg"
+            variant="outline"
+            className="gap-2"
+            onClick={() => setIsRecordingRequested(true)}
+            data-testid="button-record"
+          >
+            <Mic className="w-5 h-5" />
+            Record
+          </Button>
+          <Button
+            size="lg"
+            variant="outline"
+            className="gap-2"
+            onClick={() => createCheckpointMutation.mutate(undefined)}
+            disabled={createCheckpointMutation.isPending}
+            data-testid="button-checkpoint"
+          >
+            {createCheckpointMutation.isPending ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <Flag className="w-5 h-5" />
+            )}
+            Checkpoint
+          </Button>
+        </div>
+      </div>
+
       {/* Camera Modal */}
       <CameraCapture
         open={cameraOpen}
@@ -676,99 +727,84 @@ ${timelineWithBase64.map((item) => {
         onCapture={(file) => handleFileUpload([file])}
       />
 
-      {/* Recording Bar */}
+      {/* Recording Bar - modified to pass notebookId */}
       <RecordingBar
-        onTranscribed={() => queryClient.invalidateQueries({ queryKey: ["/api/transcriptions"] })}
+        notebookId={selectedNotebookId}
+        isRecordingRequested={isRecordingRequested}
+        onRecordingStarted={() => setIsRecordingRequested(false)}
+        onTranscribed={() => {
+          queryClient.invalidateQueries({ queryKey: ["/api/notebooks", selectedNotebookId, "timeline"] });
+          lastActivityRef.current = new Date();
+        }}
       />
-
-      {/* Delete All Confirmation Dialog */}
-      <AlertDialog open={deleteAllDialogOpen} onOpenChange={setDeleteAllDialogOpen}>
-        <AlertDialogContent data-testid="dialog-delete-all">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete everything?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete all {timeline.length} {timeline.length === 1 ? "item" : "items"} (images and transcriptions) from your timeline.
-              This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel 
-              disabled={deleteAllMutation.isPending}
-              data-testid="button-cancel-delete-all"
-            >
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault();
-                deleteAllMutation.mutate();
-              }}
-              disabled={deleteAllMutation.isPending}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              data-testid="button-confirm-delete-all"
-            >
-              {deleteAllMutation.isPending ? "Deleting..." : "Delete All"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       {/* Settings Dialog */}
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
         <DialogContent data-testid="dialog-settings">
           <DialogHeader>
             <DialogTitle>Settings</DialogTitle>
-            <DialogDescription>
-              Customize your ImageDrop experience
-            </DialogDescription>
           </DialogHeader>
           <div className="space-y-6 py-4">
-            {/* Auto-delete toggle */}
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label htmlFor="auto-delete-toggle">Auto-delete after copy</Label>
-                <p className="text-sm text-muted-foreground">
-                  Automatically delete all images after copying text
-                </p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="auto-checkpoint">Auto Checkpoint</Label>
+                <Switch
+                  id="auto-checkpoint"
+                  checked={autoCheckpointEnabled}
+                  onCheckedChange={setAutoCheckpointEnabled}
+                  data-testid="switch-auto-checkpoint"
+                />
               </div>
-              <Switch
-                id="auto-delete-toggle"
-                checked={autoDeleteEnabled}
-                onCheckedChange={setAutoDeleteEnabled}
-                data-testid="switch-auto-delete"
-              />
+              <p className="text-sm text-muted-foreground">
+                Automatically create a checkpoint after {autoCheckpointMinutes} minutes of inactivity
+              </p>
+              {autoCheckpointEnabled && (
+                <div className="flex items-center gap-2 pt-2">
+                  <Label className="text-sm">Minutes:</Label>
+                  <Select
+                    value={autoCheckpointMinutes.toString()}
+                    onValueChange={(v) => setAutoCheckpointMinutes(parseInt(v))}
+                  >
+                    <SelectTrigger className="w-20" data-testid="select-auto-checkpoint-minutes">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="2">2</SelectItem>
+                      <SelectItem value="5">5</SelectItem>
+                      <SelectItem value="10">10</SelectItem>
+                      <SelectItem value="15">15</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
-
-            {/* Timer duration selector */}
-            {autoDeleteEnabled && (
-              <div className="space-y-2">
-                <Label htmlFor="timer-select">Auto-delete timer</Label>
-                <Select
-                  value={autoDeleteTimer.toString()}
-                  onValueChange={(value) => setAutoDeleteTimer(parseInt(value))}
-                >
-                  <SelectTrigger id="timer-select" data-testid="select-timer">
-                    <SelectValue placeholder="Select timer duration" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="5">5 seconds</SelectItem>
-                    <SelectItem value="10">10 seconds</SelectItem>
-                    <SelectItem value="15">15 seconds</SelectItem>
-                    <SelectItem value="30">30 seconds</SelectItem>
-                    <SelectItem value="60">1 minute</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-sm text-muted-foreground">
-                  How long before auto-delete starts after copying
-                </p>
-              </div>
-            )}
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Add padding at bottom to account for RecordingBar */}
-      <div className="h-20" />
+      {/* Delete Notebook Dialog */}
+      <AlertDialog open={deleteAllDialogOpen} onOpenChange={setDeleteAllDialogOpen}>
+        <AlertDialogContent data-testid="dialog-delete-notebook">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this notebook?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete "{selectedNotebook?.title}" and all its photos, transcriptions, and checkpoints.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => selectedNotebookId && deleteNotebookMutation.mutate(selectedNotebookId)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete"
+            >
+              {deleteNotebookMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   );
 }

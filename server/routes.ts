@@ -6,7 +6,16 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "./objectStorage";
-import { insertImageSchema, insertTranscriptionSchema, type Image } from "@shared/schema";
+import { 
+  insertImageSchema, 
+  insertTranscriptionSchema, 
+  insertNotebookSchema,
+  insertCheckpointSchema,
+  type Image,
+  type Transcription,
+  type Checkpoint,
+  type TimelineItem,
+} from "@shared/schema";
 import { TranscriptionService } from "./transcription";
 import { randomUUID } from "crypto";
 
@@ -41,6 +50,121 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============ NOTEBOOK ROUTES ============
+
+  // Create notebook
+  app.post("/api/notebooks", async (req, res) => {
+    try {
+      const validatedData = insertNotebookSchema.parse({
+        id: randomUUID(),
+        ...req.body,
+      });
+      const notebook = await storage.createNotebook(validatedData);
+      res.json(notebook);
+    } catch (error) {
+      console.error("Error creating notebook:", error);
+      res.status(400).json({ error: "Invalid notebook data" });
+    }
+  });
+
+  // Get all notebooks
+  app.get("/api/notebooks", async (req, res) => {
+    try {
+      const notebooksList = await storage.getAllNotebooks();
+      res.json(notebooksList);
+    } catch (error) {
+      console.error("Error fetching notebooks:", error);
+      res.status(500).json({ error: "Failed to fetch notebooks" });
+    }
+  });
+
+  // Get single notebook
+  app.get("/api/notebooks/:id", async (req, res) => {
+    try {
+      const notebook = await storage.getNotebook(req.params.id);
+      if (!notebook) {
+        return res.status(404).json({ error: "Notebook not found" });
+      }
+      res.json(notebook);
+    } catch (error) {
+      console.error("Error fetching notebook:", error);
+      res.status(500).json({ error: "Failed to fetch notebook" });
+    }
+  });
+
+  // Delete notebook (and all related objects from storage)
+  app.delete("/api/notebooks/:id", async (req, res) => {
+    try {
+      const notebookId = req.params.id;
+      
+      // First, get all images to clean up object storage
+      const imagesList = await storage.getImagesByNotebook(notebookId);
+      
+      // Delete all objects from cloud storage
+      for (const image of imagesList) {
+        try {
+          const objectFile = await objectStorageService.getObjectEntityFile(image.objectPath);
+          await objectFile.delete();
+        } catch (error) {
+          if (!(error instanceof ObjectNotFoundError)) {
+            console.error(`Error deleting object ${image.objectPath}:`, error);
+          }
+        }
+      }
+      
+      // Delete notebook (cascades to images, transcriptions, checkpoints)
+      await storage.deleteNotebook(notebookId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting notebook:", error);
+      res.status(500).json({ error: "Failed to delete notebook" });
+    }
+  });
+
+  // Get notebook timeline (merged images, transcriptions, checkpoints)
+  app.get("/api/notebooks/:id/timeline", async (req, res) => {
+    try {
+      const notebookId = req.params.id;
+      
+      const [imagesList, transcriptionsList, checkpointsList] = await Promise.all([
+        storage.getImagesByNotebook(notebookId),
+        storage.getTranscriptionsByNotebook(notebookId),
+        storage.getCheckpointsByNotebook(notebookId),
+      ]);
+
+      const timeline: TimelineItem[] = [
+        ...imagesList.map((img): TimelineItem => ({
+          id: img.id,
+          type: "image",
+          timestamp: img.uploadedAt,
+          content: img,
+        })),
+        ...transcriptionsList.map((t): TimelineItem => ({
+          id: t.id,
+          type: "transcription",
+          timestamp: t.createdAt,
+          content: t,
+        })),
+        ...checkpointsList.map((c): TimelineItem => ({
+          id: c.id,
+          type: "checkpoint",
+          timestamp: c.createdAt,
+          content: c,
+        })),
+      ];
+
+      // Sort by timestamp ascending (oldest first)
+      timeline.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      res.json(timeline);
+    } catch (error) {
+      console.error("Error fetching timeline:", error);
+      res.status(500).json({ error: "Failed to fetch timeline" });
+    }
+  });
+
+  // ============ IMAGE ROUTES ============
+
   // Create image record
   app.post("/api/images", async (req, res) => {
     try {
@@ -56,8 +180,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all images
   app.get("/api/images", async (req, res) => {
     try {
-      const images = await storage.getAllImages();
-      res.json(images);
+      const imagesList = await storage.getAllImages();
+      res.json(imagesList);
     } catch (error) {
       console.error("Error fetching images:", error);
       res.status(500).json({ error: "Failed to fetch images" });
@@ -81,58 +205,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete image
   app.delete("/api/images/:id", async (req, res) => {
     try {
-      // First, get the image metadata to find the object path
       const image = await storage.getImage(req.params.id);
       if (!image) {
         return res.status(404).json({ error: "Image not found" });
       }
 
       // Delete the actual object from cloud storage first
-      const objectFile = await objectStorageService.getObjectEntityFile(image.objectPath);
-      await objectFile.delete();
+      try {
+        const objectFile = await objectStorageService.getObjectEntityFile(image.objectPath);
+        await objectFile.delete();
+      } catch (error) {
+        if (!(error instanceof ObjectNotFoundError)) {
+          console.error("Error deleting object:", error);
+        }
+      }
 
-      // Only delete metadata if cloud object deletion succeeded
       await storage.deleteImage(req.params.id);
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting image:", error);
-      if (error instanceof ObjectNotFoundError) {
-        // Object not found - still delete metadata
-        await storage.deleteImage(req.params.id);
-        return res.json({ success: true });
-      }
       res.status(500).json({ error: "Failed to delete image" });
     }
   });
 
-  // Delete all images and transcriptions
+  // Delete all images (deprecated - use notebook delete instead)
   app.delete("/api/images", async (req, res) => {
     try {
-      // Get all images first to delete from cloud storage
-      const images = await storage.getAllImages();
-      
-      // Delete all objects from cloud storage
-      for (const image of images) {
-        try {
-          const objectFile = await objectStorageService.getObjectEntityFile(image.objectPath);
-          await objectFile.delete();
-        } catch (error) {
-          if (!(error instanceof ObjectNotFoundError)) {
-            console.error(`Error deleting object ${image.objectPath}:`, error);
-          }
-          // Continue even if individual deletes fail
-        }
-      }
-
-      // Delete all metadata (images and transcriptions)
-      await storage.deleteAllImages();
-      await storage.deleteAllTranscriptions();
-      res.json({ success: true, deletedCount: images.length });
+      // This route is deprecated - notebooks handle cleanup via cascade
+      res.status(400).json({ 
+        error: "Use DELETE /api/notebooks/:id instead to delete a notebook and all its content" 
+      });
     } catch (error) {
       console.error("Error deleting all images:", error);
       res.status(500).json({ error: "Failed to delete all images" });
     }
   });
+
+  // ============ TRANSCRIPTION ROUTES ============
 
   // Create transcription record
   app.post("/api/transcriptions", async (req, res) => {
@@ -149,8 +258,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all transcriptions
   app.get("/api/transcriptions", async (req, res) => {
     try {
-      const transcriptions = await storage.getAllTranscriptions();
-      res.json(transcriptions);
+      const transcriptionsList = await storage.getAllTranscriptions();
+      res.json(transcriptionsList);
     } catch (error) {
       console.error("Error fetching transcriptions:", error);
       res.status(500).json({ error: "Failed to fetch transcriptions" });
@@ -188,8 +297,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "No audio data provided" });
       }
 
+      const { audio, notebookId } = req.body;
+      
+      if (!notebookId) {
+        return res.status(400).json({ error: "notebookId is required" });
+      }
+
       // Convert base64 audio to buffer
-      const audioBuffer = Buffer.from(req.body.audio, "base64");
+      const audioBuffer = Buffer.from(audio, "base64");
       const filename = `audio-${Date.now()}.webm`;
       
       // Save audio temporarily
@@ -202,6 +317,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const transcription = await storage.createTranscription({
         id: randomUUID(),
         text: result.text,
+        notebookId,
       });
       
       res.json(transcription);
@@ -209,10 +325,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error transcribing audio:", error);
       res.status(500).json({ error: "Failed to transcribe audio" });
     } finally {
-      // Cleanup temp file
       if (tempFilePath) {
         await transcriptionService.cleanup(tempFilePath);
       }
+    }
+  });
+
+  // ============ CHECKPOINT ROUTES ============
+
+  // Create checkpoint
+  app.post("/api/checkpoints", async (req, res) => {
+    try {
+      const validatedData = insertCheckpointSchema.parse({
+        id: randomUUID(),
+        ...req.body,
+      });
+      const checkpoint = await storage.createCheckpoint(validatedData);
+      res.json(checkpoint);
+    } catch (error) {
+      console.error("Error creating checkpoint:", error);
+      res.status(400).json({ error: "Invalid checkpoint data" });
+    }
+  });
+
+  // Get checkpoints by notebook
+  app.get("/api/notebooks/:id/checkpoints", async (req, res) => {
+    try {
+      const checkpointsList = await storage.getCheckpointsByNotebook(req.params.id);
+      res.json(checkpointsList);
+    } catch (error) {
+      console.error("Error fetching checkpoints:", error);
+      res.status(500).json({ error: "Failed to fetch checkpoints" });
+    }
+  });
+
+  // Delete checkpoint
+  app.delete("/api/checkpoints/:id", async (req, res) => {
+    try {
+      await storage.deleteCheckpoint(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting checkpoint:", error);
+      res.status(500).json({ error: "Failed to delete checkpoint" });
     }
   });
 

@@ -4,10 +4,13 @@ import { Mic, Pause, Play, Square, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface RecordingBarProps {
+  notebookId?: string | null;
   onTranscribed: () => void;
+  isRecordingRequested?: boolean;
+  onRecordingStarted?: () => void;
 }
 
-export function RecordingBar({ onTranscribed }: RecordingBarProps) {
+export function RecordingBar({ notebookId, onTranscribed, isRecordingRequested, onRecordingStarted }: RecordingBarProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -31,6 +34,14 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
       if (segmentTimerRef.current) clearTimeout(segmentTimerRef.current);
     };
   }, []);
+
+  // Start recording when requested externally
+  useEffect(() => {
+    if (isRecordingRequested && !isRecording) {
+      startRecording();
+      onRecordingStarted?.();
+    }
+  }, [isRecordingRequested]);
 
   const startRecording = async () => {
     try {
@@ -193,7 +204,7 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
             const response = await fetch("/api/transcribe", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ audio: base64Audio }),
+              body: JSON.stringify({ audio: base64Audio, notebookId }),
             });
 
             if (!response.ok) throw new Error("Transcription failed");
@@ -225,25 +236,7 @@ export function RecordingBar({ onTranscribed }: RecordingBarProps) {
   };
 
   if (!isRecording) {
-    return (
-      <div className="fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-50">
-        <div className="container max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Mic className="w-5 h-5 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">Ready to record audio</span>
-          </div>
-          <Button
-            onClick={startRecording}
-            variant="default"
-            size="sm"
-            data-testid="button-start-recording"
-          >
-            <Mic className="w-4 h-4 mr-2" />
-            Start Recording
-          </Button>
-        </div>
-      </div>
-    );
+    return null; // Don't render when not recording - let parent handle the start button
   }
 
   return (

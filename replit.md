@@ -1,22 +1,18 @@
-# ImageDrop - Instant Image Hosting
+# ImageDrop V2 - AI-Powered Lecture Capture
 
 ## Overview
 
-ImageDrop is a single-page image hosting application that enables users to upload, manage, and share images instantly. The application provides multiple upload methods (drag-and-drop, file browsing, clipboard paste, and camera capture) with a clean, minimal interface inspired by Imgur and Postimages. Users receive shareable URLs immediately upon upload for easy embedding anywhere online.
+ImageDrop V2 is a lecture capture application that combines live transcription, photo annotation, and organized notebooks. Users can capture photos during lectures, record audio transcriptions, and organize everything into class-specific notebooks with chronological timelines.
 
-**Recent Updates** (November 2025):
-- **HTML Export**: Export all images and transcriptions as a standalone HTML file with embedded base64 images - works offline, perfect for mobile-to-laptop workflow
-- **Settings Panel**: Configurable auto-delete with toggle and customizable timer (5s-60s), persisted to localStorage
-- **Maximum Camera Quality**: 4K resolution (3840x2160) with continuous autofocus, exposure, and white balance - automatically negotiates to highest device capability
-- **Camera Zoom**: Digital zoom slider (1x-3x) with hardware zoom support when available, CSS fallback
-- **Improved Toast UX**: Semi-transparent toasts with backdrop blur, auto-dismiss after 4 seconds
-- **HEIC/HEIF Support**: Automatic client-side conversion of iPhone HEIC/HEIF images to PNG using heic2any library
-- **Continuous Capture Mode**: Toggle switch enables rapid-fire photo taking that auto-uploads each shot while keeping camera open
-- **Real-Time Sync**: Gallery auto-refreshes every 3 seconds for immediate updates
-- **Bulk Management**: Delete All button with confirmation dialog removes all images and cloud storage objects as well as transcriptions
-- **Always-Visible Timestamps**: Date/time stamps permanently visible for easy text capture (Ctrl+C) during class notes
-- **Inline Timeline View**: Images and transcriptions display chronologically mixed together - oldest first - showing exactly when each photo was taken and each transcription was created
-- **Persistent Recording Bar**: Background audio recording with pause/resume, auto-transcription every 30 seconds, non-blocking UI allows photo capture during recording
+**Version 2 Updates** (February 2026):
+- **Notebooks System**: Organize captures by class/date (CS4800, CS2520, etc.)
+- **PostgreSQL Persistence**: Data survives restarts - no more lost content
+- **Timeline View**: Merged photos, transcripts, and checkpoints in chronological order
+- **Checkpoints**: Manual checkpoint button + auto-checkpoint timer for lecture segmentation
+- **Font Size Control**: Adjustable text size (10-24px)
+- **Photo Scale Control**: Adjustable image display size (25-100%)
+- **Link-Based Export**: Markdown export with photo URLs (not base64 embedded)
+- **Mobile-First Design**: Optimized for in-class phone usage
 
 ## User Preferences
 
@@ -27,136 +23,128 @@ Preferred communication style: Simple, everyday language.
 ### Frontend Architecture
 
 **Framework & Build System**
-- React 18+ with TypeScript for type safety and modern React features
-- Vite as the build tool and development server for fast HMR and optimized production builds
-- Single-page application (SPA) architecture using Wouter for lightweight client-side routing
+- React 18+ with TypeScript
+- Vite for build and dev server
+- Wouter for client-side routing
 
 **UI Component System**
-- shadcn/ui component library (New York style) built on Radix UI primitives
-- Tailwind CSS for utility-first styling with custom design tokens
-- CSS variables for theming with light/dark mode support
-- Responsive design with mobile-first breakpoints (768px mobile breakpoint)
+- shadcn/ui component library on Radix UI
+- Tailwind CSS with custom design tokens
+- Mobile-first responsive design
 
 **State Management**
-- TanStack Query (React Query) for server state management, caching, and data synchronization
-- Real-time polling with 3-second refetch interval for automatic gallery and transcription updates
-- Local React state for UI interactions and component-level state
-- Query invalidation pattern for real-time updates after mutations
-- Timeline merging: Images and transcriptions combined client-side into chronological order sorted by timestamp
+- TanStack Query for server state and caching
+- localStorage for user preferences (font size, photo scale, selected notebook)
+- Query invalidation for real-time updates
 
-**Upload Mechanism**
-- Uppy file uploader integration for robust multi-method uploads:
-  - Drag-and-drop zone
-  - File browser input
-  - Clipboard paste (Ctrl+V)
-  - Camera capture via WebRTC MediaDevices API with continuous mode toggle
-- AWS S3-compatible upload strategy using pre-signed URLs
-- Client-side image validation (file type, size limits)
-- HEIC/HEIF conversion: Automatic conversion to PNG using heic2any before upload for iPhone compatibility
-
-**Camera Capture Features**
-- Instant camera initialization on back camera (environment-facing)
-- Continuous capture mode: toggle for rapid-fire photo taking without preview interruptions
-- Auto-upload each photo while maintaining camera stream
-- Flip camera button for switching between back and front cameras
-- Orientation toggle: "Sideways (Landscape)" mode rotates captured photos 90° clockwise for sideways phone holding
-- Per-device localStorage: Both continuous mode and orientation preferences are saved per device
+**Key Components**
+- `Home.tsx` - Main page with notebook selection and timeline view
+- `RecordingBar.tsx` - Audio recording with 30-second auto-transcription
+- `CameraCapture.tsx` - Camera modal with HEIC conversion support
 
 ### Backend Architecture
 
 **Server Framework**
-- Express.js server with TypeScript
-- ESM module system for modern JavaScript features
-- Custom middleware for request logging and JSON body parsing with raw body capture
-- Development/production environment separation
+- Express.js with TypeScript
+- PostgreSQL database via Drizzle ORM
 
-**API Design Pattern**
-- RESTful API endpoints:
-  - `POST /api/objects/upload` - Generate pre-signed upload URLs
-  - `POST /api/images` - Create image metadata records
-  - `GET /api/images` - Retrieve all images (auto-polled every 3 seconds)
-  - `DELETE /api/images/:id` - Remove single image record and cloud object
-  - `DELETE /api/images` - Bulk delete all images and cloud objects
-  - `POST /api/transcribe` - Upload audio segment and transcribe via OpenAI Whisper
-  - `GET /api/transcriptions` - Retrieve all transcriptions (auto-polled every 3 seconds)
-  - `GET /objects/:objectPath(*)` - Serve uploaded files
-- JSON request/response format with Zod schema validation
-- Error handling with appropriate HTTP status codes
-- Proper error surfacing for failed mutations via toast notifications
+**API Endpoints**
+```
+Notebooks:
+  POST /api/notebooks - Create notebook
+  GET /api/notebooks - List all notebooks
+  GET /api/notebooks/:id - Get single notebook
+  DELETE /api/notebooks/:id - Delete notebook (cascades to content)
+  GET /api/notebooks/:id/timeline - Get merged timeline items
 
-**Storage Abstraction**
-- Interface-based storage pattern (`IStorage`) for flexibility
-- In-memory storage implementation (`MemStorage`) as default
-- Database-ready architecture with Drizzle ORM configured for PostgreSQL migration
-- Separation of object storage (files) and metadata storage (database records)
+Images:
+  POST /api/objects/upload - Get pre-signed upload URL
+  POST /api/images - Create image record (with notebookId)
+  GET /api/images - Get all images
+  DELETE /api/images/:id - Delete single image
 
-### Data Storage
+Transcriptions:
+  POST /api/transcribe - Upload audio and transcribe (with notebookId)
+  GET /api/transcriptions - Get all transcriptions
 
-**Database Schema** (Drizzle ORM with PostgreSQL)
-```typescript
-images table:
-  - id: varchar (primary key)
-  - objectPath: text (file location in object storage)
-  - fileName: text (original filename)
-  - fileSize: text (human-readable size)
-  - mimeType: text (image content type)
-  - uploadedAt: timestamp (automatic creation time)
+Checkpoints:
+  POST /api/checkpoints - Create checkpoint (notebookId + optional label)
+  GET /api/notebooks/:id/checkpoints - Get checkpoints for notebook
+  DELETE /api/checkpoints/:id - Delete checkpoint
+
+Objects:
+  GET /objects/:objectPath(*) - Serve uploaded files
 ```
 
-**Rationale**: Simple, flat schema optimized for fast retrieval and chronological ordering. Metadata separated from binary storage for efficient querying.
+### Database Schema (PostgreSQL)
 
-**Object Storage**
-- Google Cloud Storage integration via `@google-cloud/storage`
-- Replit sidecar authentication using external account credentials
-- Public object access configuration for shareable image URLs
-- ACL (Access Control List) system prepared for future permission management
+```typescript
+notebooks:
+  - id: varchar (primary key)
+  - title: text
+  - className: text (optional, e.g., "CS4800")
+  - createdAt: timestamp
 
-**Current State**: Using in-memory storage for development; PostgreSQL schema defined and ready for production deployment via Drizzle Kit migrations.
+images:
+  - id: varchar (primary key)
+  - notebookId: varchar (foreign key -> notebooks.id, cascade delete)
+  - objectPath: text
+  - fileName: text
+  - fileSize: text
+  - mimeType: text
+  - uploadedAt: timestamp
 
-### External Dependencies
+transcriptions:
+  - id: varchar (primary key)
+  - notebookId: varchar (foreign key -> notebooks.id, cascade delete)
+  - text: text
+  - createdAt: timestamp
 
-**Cloud Services**
-- **Google Cloud Storage**: Primary object storage for uploaded images
-  - Authentication: Replit sidecar credential service (http://127.0.0.1:1106)
-  - Access pattern: External account with automatic token refresh
-  - Configuration: Service account-style authentication without API keys
+checkpoints:
+  - id: varchar (primary key)
+  - notebookId: varchar (foreign key -> notebooks.id, cascade delete)
+  - label: text (optional)
+  - createdAt: timestamp
+```
 
-**Third-Party Libraries**
-- **Uppy** (@uppy/core, @uppy/aws-s3, @uppy/dashboard, @uppy/react): File upload management
-  - Features: Progress tracking, retry logic, multi-file support
-  - Integration: S3-compatible pre-signed URL uploads
-  
-- **Radix UI**: Unstyled, accessible component primitives (20+ components)
-  - Dialogs, dropdowns, toasts, tooltips, form controls
-  - ARIA-compliant with keyboard navigation
-  
-- **TanStack Query**: Server state synchronization
-  - Automatic background refetching
-  - Optimistic updates
-  - Cache invalidation strategies
+### Storage
 
-**Database & ORM**
-- **Drizzle ORM** with **@neondatabase/serverless**: Type-safe database client
-  - PostgreSQL dialect
-  - Schema-first design with TypeScript inference
-  - Migration system via Drizzle Kit
-  - Prepared for Neon serverless PostgreSQL deployment
+**Database**: PostgreSQL with Drizzle ORM (`DbStorage` class)
+- All metadata stored in PostgreSQL
+- Foreign key relationships with cascade delete
 
-**Development Tools**
-- **Vite plugins**: 
-  - @replit/vite-plugin-runtime-error-modal (error overlay)
-  - @replit/vite-plugin-cartographer (navigation)
-  - @replit/vite-plugin-dev-banner (development banner)
-- **TypeScript**: Strict mode enabled with path aliases (@/, @shared/, @assets/)
-- **ESBuild**: Production server bundling
+**Object Storage**: Replit Object Storage (GCS-backed)
+- Photos stored with permanent public URLs
+- No base64 embedding in exports
 
-**Design System**
-- **Tailwind CSS**: Utility-first CSS framework
-  - Custom spacing scale (2, 4, 8, 12, 16 units)
-  - Extended border radius values
-  - HSL color system with CSS variable theming
-  
-- **Fonts**: 
-  - Inter (primary interface font via Google Fonts)
-  - System font stack fallback
-  - Monospace fonts for URL display
+### Key Files
+
+```
+shared/schema.ts - Database schema and types
+server/db.ts - Database connection
+server/storage.ts - DbStorage implementation
+server/routes.ts - API endpoints
+client/src/pages/Home.tsx - Main UI
+client/src/components/RecordingBar.tsx - Audio recording
+```
+
+### Configuration
+
+**Environment Variables (auto-configured)**:
+- `DATABASE_URL` - PostgreSQL connection
+- Object storage credentials
+
+**User Settings (localStorage)**:
+- `selected-notebook-id` - Currently selected notebook
+- `font-size` - Text size (default: 14)
+- `photo-scale` - Image scale (default: 100)
+- `auto-checkpoint-enabled` - Auto checkpoint toggle
+- `auto-checkpoint-minutes` - Auto checkpoint interval (default: 5)
+
+## Development
+
+**Commands**:
+- `npm run dev` - Start development server
+- `npm run db:push` - Push schema changes to database
+
+**Workflow**: "Start application" runs `npm run dev`
