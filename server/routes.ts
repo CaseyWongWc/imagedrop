@@ -42,11 +42,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get upload URL for a new image
   app.post("/api/objects/upload", async (req, res) => {
     try {
+      console.log("Generating upload URL...");
+      console.log("PRIVATE_OBJECT_DIR:", process.env.PRIVATE_OBJECT_DIR);
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      console.log("Upload URL generated successfully");
       res.json({ uploadURL });
-    } catch (error) {
-      console.error("Error getting upload URL:", error);
-      res.status(500).json({ error: "Failed to get upload URL" });
+    } catch (error: any) {
+      console.error("Error getting upload URL:", error?.message || error);
+      console.error("Full error:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      res.status(500).json({ error: "Failed to get upload URL", details: error?.message });
     }
   });
 
