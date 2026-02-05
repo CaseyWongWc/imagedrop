@@ -116,6 +116,39 @@ export default function Home() {
     localStorage.setItem("auto-checkpoint-minutes", autoCheckpointMinutes.toString());
   }, [autoCheckpointMinutes]);
 
+  // Paste handler for clipboard images
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      if (!selectedNotebookId) return;
+      
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      
+      const imageFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (file) {
+            // Create a new file with a proper name since clipboard files have generic names
+            const timestamp = Date.now();
+            const ext = file.type.split("/")[1] || "png";
+            const namedFile = new File([file], `pasted-${timestamp}.${ext}`, { type: file.type });
+            imageFiles.push(namedFile);
+          }
+        }
+      }
+      
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        handleFileUpload(imageFiles);
+      }
+    };
+
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, [selectedNotebookId]);
+
   useEffect(() => {
     if (selectedNotebookId) {
       localStorage.setItem("selected-notebook-id", selectedNotebookId);
