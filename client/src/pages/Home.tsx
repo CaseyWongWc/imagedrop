@@ -352,9 +352,27 @@ export default function Home() {
         const fullUrl = `${window.location.origin}${imageData.objectPath}`;
         await navigator.clipboard.writeText(fullUrl);
 
+        // Auto-download the photo to the local device
+        try {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          const ext = processedFile.name.split(".").pop() || "jpg";
+          const downloadName = `imagedrop-${timestamp}.${ext}`;
+          const downloadUrl = URL.createObjectURL(processedFile);
+          const downloadLink = document.createElement("a");
+          downloadLink.href = downloadUrl;
+          downloadLink.download = downloadName;
+          downloadLink.style.display = "none";
+          document.body.appendChild(downloadLink);
+          downloadLink.click();
+          document.body.removeChild(downloadLink);
+          URL.revokeObjectURL(downloadUrl);
+        } catch {
+          // Silent fail - download is a bonus, not critical
+        }
+
         toast({
           title: "Photo captured!",
-          description: "Link copied to clipboard",
+          description: "Saved to device & link copied",
         });
       }
     } catch (error) {
