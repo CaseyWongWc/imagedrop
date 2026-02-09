@@ -27,15 +27,8 @@ import {
   Mic,
   FolderOpen,
   Upload,
-  Image as ImageIcon,
   FileText,
 } from "lucide-react";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -83,7 +76,6 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isRecordingRequested, setIsRecordingRequested] = useState(false);
-  const [mediaPickerOpen, setMediaPickerOpen] = useState(false);
   
   // Display controls with localStorage persistence
   const [fontSize, setFontSize] = useState(() => {
@@ -741,7 +733,6 @@ export default function Home() {
           if (e.target.files && e.target.files.length > 0) {
             handleFileUpload(Array.from(e.target.files));
             e.target.value = "";
-            setMediaPickerOpen(false);
           }
         }}
         data-testid="input-native-camera"
@@ -756,41 +747,51 @@ export default function Home() {
           if (e.target.files && e.target.files.length > 0) {
             handleFileUpload(Array.from(e.target.files));
             e.target.value = "";
-            setMediaPickerOpen(false);
           }
         }}
         data-testid="input-photos"
       />
 
-      {/* Bottom Action Bar */}
+      {/* Bottom Action Bar - icon-only on mobile, labels on larger screens */}
       <div className="fixed bottom-0 left-0 right-0 border-t bg-background/95 backdrop-blur z-40">
-        <div className="container max-w-4xl mx-auto px-4 py-3 flex items-center justify-center gap-3">
+        <div className="container max-w-4xl mx-auto px-4 py-3 flex items-center justify-center gap-2">
           <Button
-            size="lg"
-            className="gap-2"
-            onClick={() => setMediaPickerOpen(true)}
+            size="icon"
+            onClick={() => {
+              if (isMobile) {
+                nativeCameraRef.current?.click();
+              } else {
+                setCameraOpen(true);
+              }
+            }}
             disabled={isUploading}
-            aria-label="Add media"
-            data-testid="button-add"
+            aria-label="Take photo"
+            data-testid="button-camera"
           >
-            {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
-            Add
+            {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}
           </Button>
           <Button
-            size="lg"
+            size="icon"
             variant="outline"
-            className="gap-2"
+            onClick={() => photosInputRef.current?.click()}
+            disabled={isUploading}
+            aria-label="Upload photo"
+            data-testid="button-upload"
+          >
+            <Upload className="w-5 h-5" />
+          </Button>
+          <Button
+            size="icon"
+            variant="outline"
             onClick={() => setIsRecordingRequested(true)}
             aria-label="Start recording"
             data-testid="button-record"
           >
             <Mic className="w-5 h-5" />
-            Record
           </Button>
           <Button
-            size="lg"
+            size="icon"
             variant="outline"
-            className="gap-2"
             onClick={() => createCheckpointMutation.mutate(undefined)}
             disabled={createCheckpointMutation.isPending}
             aria-label="Create checkpoint"
@@ -801,53 +802,9 @@ export default function Home() {
             ) : (
               <Flag className="w-5 h-5" />
             )}
-            Checkpoint
           </Button>
         </div>
       </div>
-
-      {/* Media Picker Bottom Sheet */}
-      <Sheet open={mediaPickerOpen} onOpenChange={setMediaPickerOpen}>
-        <SheetContent side="bottom" className="rounded-t-xl">
-          <SheetHeader className="pb-4">
-            <SheetTitle>Add to notebook</SheetTitle>
-          </SheetHeader>
-          <div className="flex flex-wrap justify-center gap-6 pb-6">
-            <Button
-              variant="outline"
-              size="lg"
-              className="flex-col gap-2"
-              onClick={() => {
-                setMediaPickerOpen(false);
-                if (isMobile) {
-                  setTimeout(() => nativeCameraRef.current?.click(), 100);
-                } else {
-                  setCameraOpen(true);
-                }
-              }}
-              aria-label="Open camera"
-              data-testid="picker-camera"
-            >
-              <Camera className="w-6 h-6" />
-              <span className="text-xs">Camera</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="lg"
-              className="flex-col gap-2"
-              onClick={() => {
-                setMediaPickerOpen(false);
-                setTimeout(() => photosInputRef.current?.click(), 100);
-              }}
-              aria-label="Choose from photos"
-              data-testid="picker-photos"
-            >
-              <ImageIcon className="w-6 h-6" />
-              <span className="text-xs">Photos</span>
-            </Button>
-          </div>
-        </SheetContent>
-      </Sheet>
 
       {/* Camera Modal */}
       <CameraCapture
