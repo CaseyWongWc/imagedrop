@@ -54,6 +54,7 @@ Notebooks:
   POST /api/notebooks - Create notebook
   GET /api/notebooks - List all notebooks
   GET /api/notebooks/:id - Get single notebook
+  PATCH /api/notebooks/:id - Update notebook (title, className)
   DELETE /api/notebooks/:id - Delete notebook (cascades to content)
   GET /api/notebooks/:id/timeline - Get merged timeline items
 

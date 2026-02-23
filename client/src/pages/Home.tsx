@@ -28,6 +28,7 @@ import {
   FolderOpen,
   Upload,
   FileText,
+  Pencil,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -76,6 +77,9 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isRecordingRequested, setIsRecordingRequested] = useState(false);
+  const [editNotebookOpen, setEditNotebookOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editClassName, setEditClassName] = useState("");
   
   // Display controls with localStorage persistence
   const [fontSize, setFontSize] = useState(() => {
@@ -208,6 +212,19 @@ export default function Home() {
       toast({
         title: "Notebook deleted",
         description: "All content has been removed",
+      });
+    },
+  });
+
+  const updateNotebookMutation = useMutation({
+    mutationFn: async ({ id, title, className }: { id: string; title: string; className: string }) => {
+      return await apiRequest("PATCH", `/api/notebooks/${id}`, { title, className: className || null });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks"] });
+      setEditNotebookOpen(false);
+      toast({
+        title: "Notebook updated",
       });
     },
   });
@@ -584,9 +601,26 @@ export default function Home() {
               <BookOpen className="w-4 h-4" />
             </Button>
             <div className="min-w-0">
-              <h1 className="text-sm font-semibold truncate" data-testid="text-notebook-title">
-                {selectedNotebook?.title}
-              </h1>
+              <div className="flex items-center gap-1">
+                <h1 className="text-sm font-semibold truncate" data-testid="text-notebook-title">
+                  {selectedNotebook?.title}
+                </h1>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0"
+                  onClick={() => {
+                    if (selectedNotebook) {
+                      setEditTitle(selectedNotebook.title);
+                      setEditClassName(selectedNotebook.className || "");
+                      setEditNotebookOpen(true);
+                    }
+                  }}
+                  data-testid="button-edit-notebook"
+                >
+                  <Pencil className="w-3 h-3" />
+                </Button>
+              </div>
               {selectedNotebook?.className && (
                 <Badge variant="outline" className="text-xs">{selectedNotebook.className}</Badge>
               )}
@@ -908,6 +942,54 @@ export default function Home() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Edit Notebook Dialog */}
+      <Dialog open={editNotebookOpen} onOpenChange={setEditNotebookOpen}>
+        <DialogContent data-testid="dialog-edit-notebook">
+          <DialogHeader>
+            <DialogTitle>Edit Notebook</DialogTitle>
+            <DialogDescription>Change the title or class label for this notebook.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Title</Label>
+              <Input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="e.g. Lecture 3"
+                data-testid="input-edit-title"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Class (optional)</Label>
+              <Input
+                value={editClassName}
+                onChange={(e) => setEditClassName(e.target.value)}
+                placeholder="e.g. CS4990"
+                data-testid="input-edit-classname"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => {
+                if (selectedNotebookId && editTitle.trim()) {
+                  updateNotebookMutation.mutate({
+                    id: selectedNotebookId,
+                    title: editTitle.trim(),
+                    className: editClassName.trim(),
+                  });
+                }
+              }}
+              disabled={!editTitle.trim() || updateNotebookMutation.isPending}
+              data-testid="button-save-edit"
+            >
+              {updateNotebookMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

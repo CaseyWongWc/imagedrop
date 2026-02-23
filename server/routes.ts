@@ -96,6 +96,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update notebook
+  app.patch("/api/notebooks/:id", async (req, res) => {
+    try {
+      const { title, className } = req.body;
+      if (!title && className === undefined) {
+        return res.status(400).json({ error: "No fields to update" });
+      }
+      const updated = await storage.updateNotebook(req.params.id, { title, className });
+      if (!updated) {
+        return res.status(404).json({ error: "Notebook not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating notebook:", error);
+      res.status(500).json({ error: "Failed to update notebook" });
+    }
+  });
+
   // Delete notebook (and all related objects from storage)
   app.delete("/api/notebooks/:id", async (req, res) => {
     try {

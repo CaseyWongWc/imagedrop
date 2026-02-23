@@ -20,6 +20,7 @@ export interface IStorage {
   createNotebook(notebook: InsertNotebook): Promise<Notebook>;
   getNotebook(id: string): Promise<Notebook | undefined>;
   getAllNotebooks(): Promise<Notebook[]>;
+  updateNotebook(id: string, data: { title?: string; className?: string | null }): Promise<Notebook | undefined>;
   deleteNotebook(id: string): Promise<void>;
 
   // Image operations
@@ -59,6 +60,14 @@ export class DbStorage implements IStorage {
 
   async getAllNotebooks(): Promise<Notebook[]> {
     return db.select().from(notebooks).orderBy(desc(notebooks.createdAt));
+  }
+
+  async updateNotebook(id: string, data: { title?: string; className?: string | null }): Promise<Notebook | undefined> {
+    const updateData: Record<string, any> = {};
+    if (data.title !== undefined) updateData.title = data.title;
+    if (data.className !== undefined) updateData.className = data.className;
+    const [updated] = await db.update(notebooks).set(updateData).where(eq(notebooks.id, id)).returning();
+    return updated;
   }
 
   async deleteNotebook(id: string): Promise<void> {
