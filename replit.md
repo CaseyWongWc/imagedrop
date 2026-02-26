@@ -142,6 +142,43 @@ client/src/components/RecordingBar.tsx - Audio recording
 - `auto-checkpoint-enabled` - Auto checkpoint toggle
 - `auto-checkpoint-minutes` - Auto checkpoint interval (default: 5)
 
+## Project Roadmap
+
+### P1: Core Foundation (COMPLETED)
+Everything in this phase is built and working.
+- PostgreSQL persistence with Drizzle ORM (data survives restarts)
+- Notebooks system: create, edit (title + className), delete notebooks
+- Timeline view: merged photos, transcripts, and checkpoints in chronological order (oldest first)
+- Photo capture: camera modal, file upload, paste support, HEIC conversion
+- Audio transcription: 30-second recording chunks, OpenAI Whisper API integration
+- Checkpoints: manual checkpoint button + auto-checkpoint timer (configurable interval)
+- Display controls: adjustable font size (10-24px) and photo scale (25-100%)
+- Link-based Markdown export with photo URLs (not base64)
+- Auto-download photos to browser Downloads folder
+- Mobile-first responsive design with icon-only action bar (Camera, Upload, Mic, Checkpoint)
+- Object storage for photos (Replit Object Storage / GCS-backed, permanent public URLs)
+
+### P2: AI-Powered Features (NOT STARTED)
+These features build on the P1 foundation. Do not rewrite existing upload/object storage.
+- AI-generated summaries per notebook (using OpenAI GPT)
+- Smart search across all notebooks (transcription text + image metadata)
+- Auto-tagging/labeling of photos based on content
+- Suggested checkpoint labels based on transcript context
+- Study guide generation from notebook content
+
+### P3: Collaboration & Polish (NOT STARTED)
+- Shareable notebook links (read-only public view)
+- Multi-device sync improvements
+- Notebook templates (preset class names, recurring schedules)
+- Bulk operations (select multiple items, batch delete)
+- Dark mode theme toggle
+- Notification/reminder for upcoming lectures
+
+### Golden Rules (for any LLM working on this project)
+1. **Do NOT rewrite the upload/object storage system** — it works, uses Replit Object Storage with GCS, and should be left alone
+2. **Prioritize persistence** — all data goes through PostgreSQL via Drizzle ORM (`DbStorage` class in `server/storage.ts`)
+3. **Notebooks are the foundation** — every image, transcription, and checkpoint belongs to a notebook via `notebookId` foreign key
+
 ## Development
 
 **Commands**:
