@@ -27,6 +27,7 @@ export const images = pgTable("images", {
   fileSize: text("file_size").notNull(),
   mimeType: text("mime_type").notNull(),
   uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
+  ocrText: text("ocr_text"),
 });
 
 export const insertImageSchema = createInsertSchema(images).omit({

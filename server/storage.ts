@@ -28,6 +28,7 @@ export interface IStorage {
   getImage(id: string): Promise<Image | undefined>;
   getAllImages(): Promise<Image[]>;
   getImagesByNotebook(notebookId: string): Promise<Image[]>;
+  updateImageOcr(id: string, ocrText: string): Promise<Image | undefined>;
   deleteImage(id: string): Promise<void>;
   deleteAllImages(): Promise<void>;
 
@@ -95,6 +96,11 @@ export class DbStorage implements IStorage {
       .from(images)
       .where(eq(images.notebookId, notebookId))
       .orderBy(asc(images.uploadedAt));
+  }
+
+  async updateImageOcr(id: string, ocrText: string): Promise<Image | undefined> {
+    const [updated] = await db.update(images).set({ ocrText }).where(eq(images.id, id)).returning();
+    return updated;
   }
 
   async deleteImage(id: string): Promise<void> {

@@ -29,6 +29,7 @@ import {
   Upload,
   FileText,
   Pencil,
+  ScanText,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -80,6 +81,7 @@ export default function Home() {
   const [editNotebookOpen, setEditNotebookOpen] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editClassName, setEditClassName] = useState("");
+  const [scanningImageId, setScanningImageId] = useState<string | null>(null);
   
   // Display controls with localStorage persistence
   const [fontSize, setFontSize] = useState(() => {
@@ -255,6 +257,19 @@ export default function Home() {
     },
   });
 
+  const handleScanImage = async (imageId: string) => {
+    setScanningImageId(imageId);
+    try {
+      await apiRequest("POST", `/api/images/${imageId}/ocr`, undefined);
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", selectedNotebookId, "timeline"] });
+      toast({ title: "Scan complete", description: "Text extracted from photo" });
+    } catch {
+      toast({ title: "Scan failed", description: "Could not extract text", variant: "destructive" });
+    } finally {
+      setScanningImageId(null);
+    }
+  };
+
   // Auto checkpoint timer
   useEffect(() => {
     if (!autoCheckpointEnabled || !selectedNotebookId) {
@@ -425,7 +440,8 @@ export default function Home() {
           const timestamp = new Date(item.timestamp).toLocaleString();
           if (item.type === "image") {
             const img = item.content as Image;
-            return `### ${timestamp}\n\n![${img.fileName}](${baseUrl}${img.objectPath})\n`;
+            const ocrSection = img.ocrText ? `\n\n${img.ocrText}` : "";
+            return `### ${timestamp}\n\n![${img.fileName}](${baseUrl}${img.objectPath})${ocrSection}\n`;
           } else if (item.type === "transcription") {
             const trans = item.content as { text: string };
             return `### ${timestamp}\n\n${trans.text}\n`;
@@ -712,6 +728,7 @@ export default function Home() {
             {timeline.map((item) => {
               if (item.type === "image") {
                 const img = item.content as Image;
+                const isScanning = scanningImageId === img.id;
                 return (
                   <div
                     key={`image-${item.id}`}
@@ -725,13 +742,37 @@ export default function Home() {
                       style={{ maxWidth: `${photoScale}%` }}
                       loading="lazy"
                     />
-                    <div className="px-3 py-2 flex items-center justify-between">
+                    {img.ocrText && (
+                      <div className="px-3 py-2 border-t bg-muted/20" data-testid={`text-ocr-${img.id}`}>
+                        <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                          {img.ocrText}
+                        </p>
+                      </div>
+                    )}
+                    <div className="px-3 py-2 flex items-center justify-between gap-2">
                       <span className="text-muted-foreground text-xs">
                         {formatTime(item.timestamp)}
                       </span>
-                      <span className="text-muted-foreground text-xs truncate max-w-[50%]">
-                        {img.fileName}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground text-xs truncate max-w-[150px]">
+                          {img.fileName}
+                        </span>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 shrink-0"
+                          onClick={() => handleScanImage(img.id)}
+                          disabled={isScanning}
+                          title={img.ocrText ? "Re-scan text" : "Scan for text"}
+                          data-testid={`button-scan-${img.id}`}
+                        >
+                          {isScanning ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <ScanText className="w-3 h-3" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 );

@@ -60,7 +60,8 @@ Notebooks:
 
 Images:
   POST /api/objects/upload - Get pre-signed upload URL
-  POST /api/images - Create image record (with notebookId)
+  POST /api/images - Create image record (with notebookId); triggers background OCR
+  POST /api/images/:id/ocr - Manually trigger OCR on an image (returns updated image)
   GET /api/images - Get all images
   DELETE /api/images/:id - Delete single image
 
@@ -94,6 +95,7 @@ images:
   - fileSize: text
   - mimeType: text
   - uploadedAt: timestamp
+  - ocrText: text (nullable - null = not scanned, set after Vision API runs)
 
 transcriptions:
   - id: varchar (primary key)
@@ -158,8 +160,9 @@ Everything in this phase is built and working.
 - Mobile-first responsive design with icon-only action bar (Camera, Upload, Mic, Checkpoint)
 - Object storage for photos (Replit Object Storage / GCS-backed, permanent public URLs)
 
-### P2: AI-Powered Features (NOT STARTED)
+### P2: AI-Powered Features (IN PROGRESS)
 These features build on the P1 foundation. Do not rewrite existing upload/object storage.
+- [DONE] **OCR / Image Scanning**: Every new photo is automatically analyzed by OpenAI Vision (gpt-4o-mini) and the extracted text/description is stored in `ocrText` on the image. Users can also click the scan button (ScanText icon) on any existing image to trigger OCR on demand. OCR text appears below images in the timeline and is included in Markdown exports.
 - AI-generated summaries per notebook (using OpenAI GPT)
 - Smart search across all notebooks (transcription text + image metadata)
 - Auto-tagging/labeling of photos based on content
