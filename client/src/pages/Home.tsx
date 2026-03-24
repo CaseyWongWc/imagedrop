@@ -33,6 +33,7 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
+  ArrowDownUp,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import {
@@ -93,6 +94,9 @@ export default function Home() {
   });
   const [scanningImageId, setScanningImageId] = useState<string | null>(null);
   const [isScanningAll, setIsScanningAll] = useState(false);
+  const [newestFirst, setNewestFirst] = useState(() => {
+    return localStorage.getItem("newest-first") === "true";
+  });
 
   // Display controls with localStorage persistence
   const [fontSize, setFontSize] = useState(() => {
@@ -195,6 +199,8 @@ export default function Home() {
     queryKey: ["/api/notebooks", selectedNotebookId, "timeline"],
     enabled: !!selectedNotebookId,
   });
+
+  const displayedTimeline = newestFirst ? [...timeline].reverse() : timeline;
 
   // Find selected notebook
   const selectedNotebook = notebooks.find(n => n.id === selectedNotebookId);
@@ -811,7 +817,26 @@ export default function Home() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setShowOcr(!showOcr)}
+              onClick={() => {
+                const next = !newestFirst;
+                setNewestFirst(next);
+                localStorage.setItem("newest-first", String(next));
+              }}
+              className="h-7 px-2 gap-1 text-xs"
+              data-testid="button-toggle-sort"
+              title={newestFirst ? "Showing newest first" : "Showing oldest first"}
+            >
+              <ArrowDownUp className="w-3 h-3" />
+              <span className="hidden sm:inline">{newestFirst ? "Newest" : "Oldest"}</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const next = !showOcr;
+                setShowOcr(next);
+                localStorage.setItem("show-ocr", String(next));
+              }}
               className="h-7 px-2 gap-1 text-xs"
               data-testid="button-toggle-ocr"
             >
@@ -863,7 +888,7 @@ export default function Home() {
           </div>
         ) : (
           <div className="space-y-3" data-testid="timeline-container" style={{ fontSize: `${fontSize}px` }}>
-            {timeline.map((item) => {
+            {displayedTimeline.map((item) => {
               if (item.type === "image") {
                 const img = item.content as Image;
                 return (
@@ -872,7 +897,14 @@ export default function Home() {
                     className="rounded-lg border bg-card"
                     data-testid={`card-image-${item.id}`}
                   >
-                    <div className="overflow-hidden rounded-t-lg">
+                    {showOcr && img.ocrText && (
+                      <div className="px-3 pt-3 pb-2" data-testid={`text-ocr-${img.id}`}>
+                        <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                          {img.ocrText}
+                        </p>
+                      </div>
+                    )}
+                    <div className={showOcr && img.ocrText ? "overflow-hidden border-t" : "overflow-hidden rounded-t-lg"}>
                       <img
                         src={img.objectPath}
                         alt={img.fileName}
@@ -904,13 +936,6 @@ export default function Home() {
                         )}
                       </Button>
                     </div>
-                    {showOcr && img.ocrText && (
-                      <div className="px-3 pb-3 border-t" data-testid={`text-ocr-${img.id}`}>
-                        <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap leading-relaxed">
-                          {img.ocrText}
-                        </p>
-                      </div>
-                    )}
                   </div>
                 );
               } else if (item.type === "transcription") {
