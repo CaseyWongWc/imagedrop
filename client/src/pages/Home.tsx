@@ -35,6 +35,7 @@ import {
   ExternalLink,
   ArrowDownUp,
   ChevronsDown,
+  ChevronsUp,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import {
@@ -98,6 +99,9 @@ export default function Home() {
   const [newestFirst, setNewestFirst] = useState(() => {
     return localStorage.getItem("newest-first") === "true";
   });
+  const [autoJump, setAutoJump] = useState(() => {
+    return localStorage.getItem("auto-jump") === "true";
+  });
 
   // Display controls with localStorage persistence
   const [fontSize, setFontSize] = useState(() => {
@@ -122,7 +126,9 @@ export default function Home() {
   const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
   const nativeCameraRef = useRef<HTMLInputElement>(null);
   const photosInputRef = useRef<HTMLInputElement>(null);
+  const timelineTopRef = useRef<HTMLDivElement>(null);
   const timelineBottomRef = useRef<HTMLDivElement>(null);
+  const prevTimelineLengthRef = useRef<number>(0);
   
   // Detect mobile for native camera usage (SSR-safe)
   const [isMobile, setIsMobile] = useState(false);
@@ -203,6 +209,18 @@ export default function Home() {
   });
 
   const displayedTimeline = newestFirst ? [...timeline].reverse() : timeline;
+
+  // Auto-jump when new timeline items arrive
+  useEffect(() => {
+    const prev = prevTimelineLengthRef.current;
+    prevTimelineLengthRef.current = timeline.length;
+    if (!autoJump || prev === 0 || timeline.length <= prev) return;
+    if (newestFirst) {
+      timelineTopRef.current?.scrollIntoView({ behavior: "smooth" });
+    } else {
+      timelineBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [timeline.length, autoJump, newestFirst]);
 
   // Find selected notebook
   const selectedNotebook = notebooks.find(n => n.id === selectedNotebookId);
@@ -835,12 +853,18 @@ export default function Home() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => timelineBottomRef.current?.scrollIntoView({ behavior: "smooth" })}
+                onClick={() => {
+                  if (newestFirst) {
+                    timelineTopRef.current?.scrollIntoView({ behavior: "smooth" });
+                  } else {
+                    timelineBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+                  }
+                }}
                 className="h-7 px-2 gap-1 text-xs"
                 data-testid="button-jump-to-latest"
                 title="Jump to latest"
               >
-                <ChevronsDown className="w-3 h-3" />
+                {newestFirst ? <ChevronsUp className="w-3 h-3" /> : <ChevronsDown className="w-3 h-3" />}
                 <span className="hidden sm:inline">Latest</span>
               </Button>
             )}
@@ -903,6 +927,7 @@ export default function Home() {
           </div>
         ) : (
           <div className="space-y-3" data-testid="timeline-container" style={{ fontSize: `${fontSize}px` }}>
+            <div ref={timelineTopRef} />
             {displayedTimeline.map((item) => {
               if (item.type === "image") {
                 const img = item.content as Image;
@@ -912,14 +937,14 @@ export default function Home() {
                     className="rounded-lg border bg-card"
                     data-testid={`card-image-${item.id}`}
                   >
-                    {showOcr && img.ocrText && (
+                    {showOcr && img.ocrText && !newestFirst && (
                       <div className="px-3 pt-3 pb-2" data-testid={`text-ocr-${img.id}`}>
                         <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
                           {img.ocrText}
                         </p>
                       </div>
                     )}
-                    <div className={showOcr && img.ocrText ? "overflow-hidden border-t" : "overflow-hidden rounded-t-lg"}>
+                    <div className={showOcr && img.ocrText && !newestFirst ? "overflow-hidden border-t" : "overflow-hidden rounded-t-lg"}>
                       <img
                         src={img.objectPath}
                         alt={img.fileName}
@@ -951,6 +976,13 @@ export default function Home() {
                         )}
                       </Button>
                     </div>
+                    {showOcr && img.ocrText && newestFirst && (
+                      <div className="px-3 pb-3 border-t" data-testid={`text-ocr-${img.id}`}>
+                        <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap leading-relaxed">
+                          {img.ocrText}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 );
               } else if (item.type === "transcription") {
@@ -1113,7 +1145,25 @@ export default function Home() {
                 />
               </div>
               <p className="text-sm text-muted-foreground">
-                Display extracted text beneath each photo in the timeline
+                Display extracted text beside each photo in the timeline
+              </p>
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="auto-jump">Auto-scroll to new content</Label>
+                <Switch
+                  id="auto-jump"
+                  checked={autoJump}
+                  onCheckedChange={(v) => {
+                    setAutoJump(v);
+                    localStorage.setItem("auto-jump", String(v));
+                  }}
+                  data-testid="switch-auto-jump"
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Automatically scroll to the latest item when new content is added
               </p>
             </div>
             <Separator />
