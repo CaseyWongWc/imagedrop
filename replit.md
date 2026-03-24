@@ -169,11 +169,20 @@ Everything in this phase is built and working.
 - New endpoint: `POST /api/notebooks/:id/export/notion`
 - New server module: `server/notion.ts`
 
-### P2: AI-Powered Features (NOT STARTED)
+### P2: AI-Powered Features (IN PROGRESS)
 These features build on the P1 foundation. Do not rewrite existing upload/object storage.
+
+**Completed:**
+- OCR: Auto-extract text from photos on upload (GPT-4o-mini vision, background non-blocking)
+- Manual "Scan" button per photo and "Scan all unscanned" batch button per notebook
+- Global "Show OCR" toggle in settings bar (persisted to localStorage)
+- OCR text included in Markdown export
+- New endpoints: `POST /api/images/:id/ocr`, `POST /api/notebooks/:id/ocr-all`
+- New server module: `server/vision.ts`
+
+**Not started:**
 - AI-generated summaries per notebook (using OpenAI GPT)
 - Smart search across all notebooks (transcription text + image metadata)
-- Auto-tagging/labeling of photos based on content
 - Suggested checkpoint labels based on transcript context
 - Study guide generation from notebook content
 
