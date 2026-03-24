@@ -34,6 +34,7 @@ import {
   EyeOff,
   ExternalLink,
   ArrowDownUp,
+  ChevronsDown,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import {
@@ -121,6 +122,7 @@ export default function Home() {
   const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
   const nativeCameraRef = useRef<HTMLInputElement>(null);
   const photosInputRef = useRef<HTMLInputElement>(null);
+  const timelineBottomRef = useRef<HTMLDivElement>(null);
   
   // Detect mobile for native camera usage (SSR-safe)
   const [isMobile, setIsMobile] = useState(false);
@@ -829,6 +831,19 @@ export default function Home() {
               <ArrowDownUp className="w-3 h-3" />
               <span className="hidden sm:inline">{newestFirst ? "Newest" : "Oldest"}</span>
             </Button>
+            {timeline.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => timelineBottomRef.current?.scrollIntoView({ behavior: "smooth" })}
+                className="h-7 px-2 gap-1 text-xs"
+                data-testid="button-jump-to-latest"
+                title="Jump to latest"
+              >
+                <ChevronsDown className="w-3 h-3" />
+                <span className="hidden sm:inline">Latest</span>
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -973,6 +988,7 @@ export default function Home() {
                 );
               }
             })}
+            <div ref={timelineBottomRef} />
           </div>
         )}
       </main>
