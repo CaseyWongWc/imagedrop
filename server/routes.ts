@@ -18,6 +18,7 @@ import {
 } from "@shared/schema";
 import { TranscriptionService } from "./transcription";
 import { VisionService } from "./vision";
+import { exportNotebookToNotion } from "./notion";
 import { randomUUID } from "crypto";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -443,6 +444,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error deleting checkpoint:", error);
       res.status(500).json({ error: "Failed to delete checkpoint" });
+    }
+  });
+
+  // ============ NOTION EXPORT ROUTE ============
+
+  // Export notebook to Notion
+  app.post("/api/notebooks/:id/export/notion", async (req, res) => {
+    try {
+      const notebookId = req.params.id;
+
+      const notebook = await storage.getNotebook(notebookId);
+      if (!notebook) {
+        return res.status(404).json({ error: "Notebook not found" });
+      }
+
+      const [imagesList, transcriptionsList, checkpointsList] = await Promise.all([
+        storage.getImagesByNotebook(notebookId),
+        storage.getTranscriptionsByNotebook(notebookId),
+        storage.getCheckpointsByNotebook(notebookId),
+      ]);
+
+      const timeline: TimelineItem[] = [
+        ...imagesList.map((img): TimelineItem => ({
+          id: img.id,
+          type: "image",
+          timestamp: img.uploadedAt,
+          content: img,
+        })),
+        ...transcriptionsList.map((t): TimelineItem => ({
+          id: t.id,
+          type: "transcription",
+          timestamp: t.createdAt,
+          content: t,
+        })),
+        ...checkpointsList.map((c): TimelineItem => ({
+          id: c.id,
+          type: "checkpoint",
+          timestamp: c.createdAt,
+          content: c,
+        })),
+      ];
+
+      timeline.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+
+      const result = await exportNotebookToNotion(
+        notebook.title,
+        notebook.className,
+        notebook.createdAt,
+        timeline,
+        baseUrl
+      );
+
+      res.json({ url: result.url, pageId: result.pageId });
+    } catch (error: any) {
+      console.error("Error exporting to Notion:", error);
+      res.status(500).json({ error: error?.message || "Failed to export to Notion" });
     }
   });
 

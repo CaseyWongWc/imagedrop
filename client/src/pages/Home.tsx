@@ -32,7 +32,9 @@ import {
   ScanText,
   Eye,
   EyeOff,
+  ExternalLink,
 } from "lucide-react";
+import { SiNotion } from "react-icons/si";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -79,6 +81,7 @@ export default function Home() {
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isSendingToNotion, setIsSendingToNotion] = useState(false);
   const [isRecordingRequested, setIsRecordingRequested] = useState(false);
   const [editNotebookOpen, setEditNotebookOpen] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -535,6 +538,38 @@ export default function Home() {
     }
   };
 
+  const handleSendToNotion = async () => {
+    if (!selectedNotebookId) return;
+
+    setIsSendingToNotion(true);
+    try {
+      const res = await apiRequest("POST", `/api/notebooks/${selectedNotebookId}/export/notion`, undefined);
+      const data = await res.json() as { url: string; pageId: string };
+      toast({
+        title: "Sent to Notion!",
+        description: (
+          <a
+            href={data.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 underline underline-offset-2"
+          >
+            Open in Notion <ExternalLink className="w-3 h-3" />
+          </a>
+        ),
+      });
+    } catch (error: any) {
+      console.error("Notion export error:", error);
+      toast({
+        title: "Failed to send to Notion",
+        description: error?.message || "Please try again",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSendingToNotion(false);
+    }
+  };
+
   const formatTime = (date: Date) => {
     return new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
@@ -700,6 +735,20 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleSendToNotion}
+              disabled={isSendingToNotion || timeline.length === 0}
+              aria-label="Send to Notion"
+              data-testid="button-send-to-notion"
+            >
+              {isSendingToNotion ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <SiNotion className="w-4 h-4" />
+              )}
+            </Button>
             <Button
               variant="ghost"
               size="icon"

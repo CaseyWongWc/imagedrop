@@ -57,6 +57,7 @@ Notebooks:
   PATCH /api/notebooks/:id - Update notebook (title, className)
   DELETE /api/notebooks/:id - Delete notebook (cascades to content)
   GET /api/notebooks/:id/timeline - Get merged timeline items
+  POST /api/notebooks/:id/export/notion - Export notebook to a new Notion page
 
 Images:
   POST /api/objects/upload - Get pre-signed upload URL
@@ -157,6 +158,16 @@ Everything in this phase is built and working.
 - Auto-download photos to browser Downloads folder
 - Mobile-first responsive design with icon-only action bar (Camera, Upload, Mic, Checkpoint)
 - Object storage for photos (Replit Object Storage / GCS-backed, permanent public URLs)
+
+### P1.5: Notion Export (COMPLETED)
+- Notion integration via Replit Connectors SDK (`@replit/connectors-sdk`)
+- "Send to Notion" button in notebook header (Notion icon)
+- Creates a new Notion page titled: `notebook title — class — date`
+- Full timeline exported in chronological order: image blocks, transcription paragraphs, checkpoint dividers/headings
+- Success toast with clickable "Open in Notion" link
+- Error toast with descriptive message on failure
+- New endpoint: `POST /api/notebooks/:id/export/notion`
+- New server module: `server/notion.ts`
 
 ### P2: AI-Powered Features (NOT STARTED)
 These features build on the P1 foundation. Do not rewrite existing upload/object storage.
