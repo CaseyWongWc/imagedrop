@@ -29,6 +29,9 @@ import {
   Upload,
   FileText,
   Pencil,
+  ScanText,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -81,6 +84,13 @@ export default function Home() {
   const [editTitle, setEditTitle] = useState("");
   const [editClassName, setEditClassName] = useState("");
   
+  // OCR state
+  const [showOcr, setShowOcr] = useState(() => {
+    return localStorage.getItem("show-ocr") === "true";
+  });
+  const [scanningImageId, setScanningImageId] = useState<string | null>(null);
+  const [isScanningAll, setIsScanningAll] = useState(false);
+
   // Display controls with localStorage persistence
   const [fontSize, setFontSize] = useState(() => {
     const saved = localStorage.getItem("font-size");
@@ -127,6 +137,10 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem("auto-checkpoint-minutes", autoCheckpointMinutes.toString());
   }, [autoCheckpointMinutes]);
+
+  useEffect(() => {
+    localStorage.setItem("show-ocr", showOcr.toString());
+  }, [showOcr]);
 
   // Paste handler for clipboard images
   useEffect(() => {
@@ -236,6 +250,64 @@ export default function Home() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/notebooks", selectedNotebookId, "timeline"] });
       lastActivityRef.current = new Date();
+    },
+  });
+
+  const ocrScanMutation = useMutation({
+    mutationFn: async (imageId: string) => {
+      setScanningImageId(imageId);
+      return await apiRequest("POST", `/api/images/${imageId}/ocr`, undefined);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", selectedNotebookId, "timeline"] });
+      setScanningImageId(null);
+      toast({ title: "OCR complete", description: "Text extracted successfully" });
+    },
+    onError: () => {
+      setScanningImageId(null);
+      toast({ title: "OCR failed", description: "Could not extract text", variant: "destructive" });
+    },
+  });
+
+  const scanAllMutation = useMutation({
+    mutationFn: async (notebookId: string) => {
+      setIsScanningAll(true);
+      return await apiRequest("POST", `/api/notebooks/${notebookId}/ocr-all`, undefined);
+    },
+    onSuccess: async (res) => {
+      const data = await res.json();
+      if (data.total === 0) {
+        setIsScanningAll(false);
+        toast({ title: "All photos already scanned" });
+        return;
+      }
+      toast({
+        title: "Scanning photos",
+        description: `Processing ${data.total} photo${data.total !== 1 ? "s" : ""} in background`,
+      });
+      // Poll until all images are scanned or up to 90 seconds
+      let polls = 0;
+      const maxPolls = 30;
+      const pollInterval = setInterval(async () => {
+        polls++;
+        await queryClient.invalidateQueries({ queryKey: ["/api/notebooks", selectedNotebookId, "timeline"] });
+        // Check current timeline for unscanned images
+        const current = queryClient.getQueryData<TimelineItem[]>(["/api/notebooks", selectedNotebookId, "timeline"]);
+        const remaining = current
+          ? current.filter((item) => item.type === "image" && !(item.content as Image).ocrText).length
+          : null;
+        if (remaining === 0 || polls >= maxPolls) {
+          clearInterval(pollInterval);
+          setIsScanningAll(false);
+          if (remaining === 0) {
+            toast({ title: "Scan complete", description: "All photos have been scanned" });
+          }
+        }
+      }, 3000);
+    },
+    onError: () => {
+      setIsScanningAll(false);
+      toast({ title: "Scan failed", description: "Could not start batch scan", variant: "destructive" });
     },
   });
 
@@ -425,7 +497,8 @@ export default function Home() {
           const timestamp = new Date(item.timestamp).toLocaleString();
           if (item.type === "image") {
             const img = item.content as Image;
-            return `### ${timestamp}\n\n![${img.fileName}](${baseUrl}${img.objectPath})\n`;
+            const ocrSection = img.ocrText ? `\n\n**OCR Text:**\n\n${img.ocrText}` : "";
+            return `### ${timestamp}\n\n![${img.fileName}](${baseUrl}${img.objectPath})${ocrSection}\n`;
           } else if (item.type === "transcription") {
             const trans = item.content as { text: string };
             return `### ${timestamp}\n\n${trans.text}\n`;
@@ -686,6 +759,38 @@ export default function Home() {
               <span className="text-xs text-muted-foreground w-8">{photoScale}%</span>
             </div>
             <div className="flex-1" />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowOcr(!showOcr)}
+              className="h-7 px-2 gap-1 text-xs"
+              data-testid="button-toggle-ocr"
+            >
+              {showOcr ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+              <span className="hidden sm:inline">OCR</span>
+            </Button>
+            {(() => {
+              const unscannedCount = timeline.filter(
+                (item) => item.type === "image" && !(item.content as Image).ocrText
+              ).length;
+              return unscannedCount > 0 ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => selectedNotebookId && scanAllMutation.mutate(selectedNotebookId)}
+                  disabled={isScanningAll || scanAllMutation.isPending}
+                  className="h-7 px-2 gap-1 text-xs"
+                  data-testid="button-scan-all"
+                >
+                  {isScanningAll ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <ScanText className="w-3 h-3" />
+                  )}
+                  <span className="hidden sm:inline">Scan all ({unscannedCount})</span>
+                </Button>
+              ) : null;
+            })()}
             <span className="text-xs text-muted-foreground">
               {timeline.length} item{timeline.length !== 1 && "s"}
             </span>
@@ -715,24 +820,48 @@ export default function Home() {
                 return (
                   <div
                     key={`image-${item.id}`}
-                    className="rounded-lg border overflow-hidden bg-card"
+                    className="rounded-lg border bg-card"
                     data-testid={`card-image-${item.id}`}
                   >
-                    <img
-                      src={img.objectPath}
-                      alt={img.fileName}
-                      className="w-full h-auto"
-                      style={{ maxWidth: `${photoScale}%` }}
-                      loading="lazy"
-                    />
-                    <div className="px-3 py-2 flex items-center justify-between">
+                    <div className="overflow-hidden rounded-t-lg">
+                      <img
+                        src={img.objectPath}
+                        alt={img.fileName}
+                        className="w-full h-auto"
+                        style={{ maxWidth: `${photoScale}%` }}
+                        loading="lazy"
+                      />
+                    </div>
+                    <div className="px-3 py-2 flex items-center justify-between gap-2">
                       <span className="text-muted-foreground text-xs">
                         {formatTime(item.timestamp)}
                       </span>
-                      <span className="text-muted-foreground text-xs truncate max-w-[50%]">
+                      <span className="text-muted-foreground text-xs truncate flex-1 text-right max-w-[50%]">
                         {img.fileName}
                       </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="shrink-0"
+                        onClick={() => ocrScanMutation.mutate(img.id)}
+                        disabled={scanningImageId === img.id}
+                        aria-label="Scan image for text"
+                        data-testid={`button-scan-image-${img.id}`}
+                      >
+                        {scanningImageId === img.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <ScanText className="w-3 h-3" />
+                        )}
+                      </Button>
                     </div>
+                    {showOcr && img.ocrText && (
+                      <div className="px-3 pb-3 border-t" data-testid={`text-ocr-${img.id}`}>
+                        <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap leading-relaxed">
+                          {img.ocrText}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 );
               } else if (item.type === "transcription") {
@@ -883,6 +1012,21 @@ export default function Home() {
             <DialogTitle>Settings</DialogTitle>
           </DialogHeader>
           <div className="space-y-6 py-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="show-ocr">Show OCR Text</Label>
+                <Switch
+                  id="show-ocr"
+                  checked={showOcr}
+                  onCheckedChange={setShowOcr}
+                  data-testid="switch-show-ocr"
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Display extracted text beneath each photo in the timeline
+              </p>
+            </div>
+            <Separator />
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="auto-checkpoint">Auto Checkpoint</Label>

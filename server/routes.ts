@@ -17,11 +17,13 @@ import {
   type TimelineItem,
 } from "@shared/schema";
 import { TranscriptionService } from "./transcription";
+import { VisionService } from "./vision";
 import { randomUUID } from "crypto";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const objectStorageService = new ObjectStorageService();
   const transcriptionService = new TranscriptionService();
+  const visionService = new VisionService();
 
   // Serve uploaded objects (public access for this use case)
   app.get("/objects/:objectPath(*)", async (req, res) => {
@@ -193,9 +195,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validatedData = insertImageSchema.parse(req.body);
       const image = await storage.createImage(validatedData);
       res.json(image);
+
+      // Trigger background OCR (non-blocking)
+      const imageUrl = `${req.protocol}://${req.get("host")}${image.objectPath}`;
+      visionService.extractTextFromUrl(imageUrl).then(async (ocrText) => {
+        await storage.updateImageOcr(image.id, ocrText);
+      }).catch((err) => {
+        console.error(`Background OCR failed for image ${image.id}:`, err);
+      });
     } catch (error) {
       console.error("Error creating image:", error);
       res.status(400).json({ error: "Invalid image data" });
+    }
+  });
+
+  // Manual OCR scan for a single image
+  app.post("/api/images/:id/ocr", async (req, res) => {
+    try {
+      const image = await storage.getImage(req.params.id);
+      if (!image) {
+        return res.status(404).json({ error: "Image not found" });
+      }
+
+      const imageUrl = `${req.protocol}://${req.get("host")}${image.objectPath}`;
+      const ocrText = await visionService.extractTextFromUrl(imageUrl);
+      const updated = await storage.updateImageOcr(image.id, ocrText);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error running OCR:", error);
+      res.status(500).json({ error: "Failed to run OCR" });
+    }
+  });
+
+  // Batch-scan all images in a notebook that have no ocrText
+  app.post("/api/notebooks/:id/ocr-all", async (req, res) => {
+    try {
+      const imagesList = await storage.getImagesByNotebook(req.params.id);
+      const unscanned = imagesList.filter((img) => !img.ocrText);
+
+      res.json({ total: unscanned.length, queued: true });
+
+      // Process in background, sequentially to avoid rate limits
+      (async () => {
+        for (const img of unscanned) {
+          try {
+            const imageUrl = `${req.protocol}://${req.get("host")}${img.objectPath}`;
+            const ocrText = await visionService.extractTextFromUrl(imageUrl);
+            await storage.updateImageOcr(img.id, ocrText);
+          } catch (err) {
+            console.error(`Batch OCR failed for image ${img.id}:`, err);
+          }
+        }
+      })();
+    } catch (error) {
+      console.error("Error running batch OCR:", error);
+      res.status(500).json({ error: "Failed to run batch OCR" });
     }
   });
 
