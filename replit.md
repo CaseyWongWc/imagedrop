@@ -181,8 +181,14 @@ These features build on the P1 foundation. Do not rewrite existing upload/object
 - New endpoints: `POST /api/images/:id/ocr`, `POST /api/notebooks/:id/ocr-all`
 - New server module: `server/vision.ts`
 
+**Completed:**
+- Auto-Summary: configurable interval (5/10/15/30 min), collects recent captures, generates GPT-4o-mini markdown summary, inserts summary cards into timeline (violet background, sparkle icon)
+- Markdown rendering: react-markdown@8 + remark-math + rehype-katex + react-syntax-highlighter (code, math, bold, bullets)
+- MarkdownRenderer component used for both summary cards and OCR text
+- New endpoint: `POST /api/summary` (entries → markdown summary, fallback extractive)
+- New component: `client/src/components/MarkdownRenderer.tsx`
+
 **Not started:**
-- AI-generated summaries per notebook (using OpenAI GPT)
 - Smart search across all notebooks (transcription text + image metadata)
 - Suggested checkpoint labels based on transcript context
 - Study guide generation from notebook content

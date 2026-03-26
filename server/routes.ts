@@ -519,6 +519,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // AI summary endpoint
+  app.post("/api/summary", async (req, res) => {
+    const { entries } = req.body as { entries: Array<{ text: string; timestamp: string }> };
+    if (!entries || entries.length === 0) {
+      return res.status(400).json({ error: "No entries provided" });
+    }
+    try {
+      const OpenAI = (await import("openai")).default;
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const formatted = entries.map(e => `[${e.timestamp}] ${e.text}`).join("\n\n");
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{
+          role: "user",
+          content: `You are summarizing lecture notes captured at specific timestamps. Create a concise, well-structured summary in markdown format.
+
+Guidelines:
+- Use **bold** for key terms and concepts
+- Use bullet points for lists and definitions
+- Use inline math $...$ for formulas (e.g., $E=mc^2$) and block math $$...$$ for equations
+- Use \`code\` for short code snippets and triple-backtick code blocks with language for multi-line code
+- Use ## headings only if multiple clearly distinct topics are present
+- Be concise but complete — focus on what's most important for studying
+
+Entries to summarize:
+${formatted}`,
+        }],
+        max_tokens: 1024,
+      });
+      const summary = response.choices[0]?.message?.content?.trim() ?? "";
+      res.json({ summary });
+    } catch (error: any) {
+      console.error("Summary generation error:", error);
+      // Fallback: simple extractive summary
+      const bullets = entries
+        .map(e => `- ${e.text.split(/[.\n]/)[0].trim()}`)
+        .filter(b => b.length > 2)
+        .slice(0, 6)
+        .join("\n");
+      res.json({ summary: `**Summary**\n\n${bullets || "No content to summarize."}` });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;

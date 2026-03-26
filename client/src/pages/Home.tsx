@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Notebook, Image, InsertImage, TimelineItem } from "@shared/schema";
@@ -36,8 +36,10 @@ import {
   ArrowDownUp,
   ChevronsDown,
   ChevronsUp,
+  Sparkles,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -67,6 +69,15 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import heic2any from "heic2any";
 
+type SummaryCard = {
+  id: string;
+  type: "summary";
+  timestamp: Date;
+  text: string;
+};
+
+type DisplayItem = TimelineItem | SummaryCard;
+
 export default function Home() {
   const { toast } = useToast();
   
@@ -88,6 +99,13 @@ export default function Home() {
   const [notionParentPageId, setNotionParentPageId] = useState<string>(() => {
     return localStorage.getItem("notion-parent-page-id") ?? "";
   });
+  const [autoSummaryMinutes, setAutoSummaryMinutes] = useState<number>(() => {
+    return parseInt(localStorage.getItem("auto-summary-minutes") ?? "0", 10);
+  });
+  const [summaryCards, setSummaryCards] = useState<SummaryCard[]>([]);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const lastSummaryAtRef = useRef<number>(Date.now());
+
   const [isRecordingRequested, setIsRecordingRequested] = useState(false);
   const [editNotebookOpen, setEditNotebookOpen] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -230,6 +248,67 @@ export default function Home() {
       timelineBottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [timeline.length, autoJump, newestFirst]);
+
+  // Auto-summary timer
+  useEffect(() => {
+    if (!autoSummaryMinutes || !selectedNotebookId) return;
+    const interval = setInterval(async () => {
+      if (timeline.length === 0 || isGeneratingSummary) return;
+      const now = Date.now();
+      if (now - lastSummaryAtRef.current < autoSummaryMinutes * 60 * 1000) return;
+      const since = lastSummaryAtRef.current;
+      const recentItems = timeline.filter(item => new Date(item.timestamp).getTime() > since);
+      const entries = recentItems.flatMap(item => {
+        const ts = new Date(item.timestamp).toLocaleString();
+        if (item.type === "transcription") {
+          const t = item.content as { text: string };
+          return [{ text: t.text, timestamp: ts }];
+        }
+        if (item.type === "image") {
+          const img = item.content as { ocrText?: string; fileName: string };
+          if (img.ocrText) return [{ text: img.ocrText, timestamp: `Photo: ${img.fileName} at ${ts}` }];
+          return [];
+        }
+        if (item.type === "checkpoint") {
+          const cp = item.content as { label?: string };
+          return [{ text: `Checkpoint: ${cp.label || "Checkpoint"}`, timestamp: ts }];
+        }
+        return [];
+      });
+      if (entries.length === 0) return;
+      setIsGeneratingSummary(true);
+      lastSummaryAtRef.current = now;
+      try {
+        const res = await apiRequest("POST", "/api/summary", { entries });
+        const data = await res.json() as { summary: string };
+        setSummaryCards(prev => [...prev, {
+          id: crypto.randomUUID(),
+          type: "summary",
+          timestamp: new Date(),
+          text: data.summary,
+        }]);
+      } catch (e) {
+        console.error("Auto-summary failed:", e);
+      } finally {
+        setIsGeneratingSummary(false);
+      }
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [autoSummaryMinutes, selectedNotebookId, timeline, isGeneratingSummary]);
+
+  // Merged display: timeline items + summary cards sorted by timestamp
+  const mergedDisplay = useMemo<DisplayItem[]>(() => {
+    const combined: DisplayItem[] = [
+      ...displayedTimeline,
+      ...summaryCards,
+    ];
+    combined.sort((a, b) => {
+      const aT = new Date(a.timestamp).getTime();
+      const bT = new Date(b.timestamp).getTime();
+      return newestFirst ? bT - aT : aT - bT;
+    });
+    return combined;
+  }, [displayedTimeline, summaryCards, newestFirst]);
 
   // Find selected notebook
   const selectedNotebook = notebooks.find(n => n.id === selectedNotebookId);
@@ -772,6 +851,12 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            {isGeneratingSummary && (
+              <div className="flex items-center gap-1 px-2 text-xs text-violet-500" data-testid="indicator-generating-summary">
+                <Sparkles className="w-3 h-3 animate-pulse" />
+                <span className="hidden sm:inline">Summarizing…</span>
+              </div>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -939,7 +1024,26 @@ export default function Home() {
         ) : (
           <div className="space-y-3" data-testid="timeline-container" style={{ fontSize: `${fontSize}px` }}>
             <div ref={timelineTopRef} />
-            {displayedTimeline.map((item) => {
+            {mergedDisplay.map((item) => {
+              if (item.type === "summary") {
+                const s = item as SummaryCard;
+                return (
+                  <div
+                    key={`summary-${s.id}`}
+                    className="rounded-lg border bg-violet-50 dark:bg-violet-950/30 border-violet-200 dark:border-violet-800"
+                    data-testid={`card-summary-${s.id}`}
+                  >
+                    <div className="px-3 py-2 flex items-center gap-2 border-b border-violet-200 dark:border-violet-800">
+                      <Sparkles className="w-3.5 h-3.5 text-violet-500 shrink-0" />
+                      <span className="text-xs font-medium text-violet-600 dark:text-violet-400">AI Summary</span>
+                      <span className="text-xs text-muted-foreground ml-auto">{formatTime(s.timestamp)}</span>
+                    </div>
+                    <div className="px-3 py-3 text-xs text-foreground">
+                      <MarkdownRenderer content={s.text} />
+                    </div>
+                  </div>
+                );
+              }
               if (item.type === "image") {
                 const img = item.content as Image;
                 return (
@@ -950,9 +1054,9 @@ export default function Home() {
                   >
                     {showOcr && img.ocrText && !newestFirst && (
                       <div className="px-3 pt-3 pb-2" data-testid={`text-ocr-${img.id}`}>
-                        <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
-                          {img.ocrText}
-                        </p>
+                        <div className="text-xs text-muted-foreground leading-relaxed">
+                          <MarkdownRenderer content={img.ocrText} />
+                        </div>
                       </div>
                     )}
                     <div className={showOcr && img.ocrText && !newestFirst ? "overflow-hidden border-t" : "overflow-hidden rounded-t-lg"}>
@@ -989,9 +1093,9 @@ export default function Home() {
                     </div>
                     {showOcr && img.ocrText && newestFirst && (
                       <div className="px-3 pb-3 border-t" data-testid={`text-ocr-${img.id}`}>
-                        <p className="text-xs text-muted-foreground mt-2 whitespace-pre-wrap leading-relaxed">
-                          {img.ocrText}
-                        </p>
+                        <div className="text-xs text-muted-foreground mt-2 leading-relaxed">
+                          <MarkdownRenderer content={img.ocrText} />
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1213,13 +1317,41 @@ export default function Home() {
             </div>
             <Separator />
             <div className="space-y-2">
+              <Label>Auto-Summary Interval</Label>
+              <Select
+                value={autoSummaryMinutes.toString()}
+                onValueChange={(v) => {
+                  const val = parseInt(v, 10);
+                  setAutoSummaryMinutes(val);
+                  localStorage.setItem("auto-summary-minutes", v);
+                  lastSummaryAtRef.current = Date.now();
+                }}
+              >
+                <SelectTrigger data-testid="select-auto-summary">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Off</SelectItem>
+                  <SelectItem value="5">Every 5 minutes</SelectItem>
+                  <SelectItem value="10">Every 10 minutes</SelectItem>
+                  <SelectItem value="15">Every 15 minutes</SelectItem>
+                  <SelectItem value="30">Every 30 minutes</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">
+                Automatically generate an AI summary of recent captures at regular intervals
+              </p>
+            </div>
+            <Separator />
+            <div className="space-y-2">
               <Label>Notion Export Destination</Label>
               <Select
-                value={notionParentPageId}
+                value={notionParentPageId || "__root__"}
                 onValueChange={(v) => {
-                  setNotionParentPageId(v);
-                  if (v) {
-                    localStorage.setItem("notion-parent-page-id", v);
+                  const val = v === "__root__" ? "" : v;
+                  setNotionParentPageId(val);
+                  if (val) {
+                    localStorage.setItem("notion-parent-page-id", val);
                   } else {
                     localStorage.removeItem("notion-parent-page-id");
                   }
@@ -1229,7 +1361,7 @@ export default function Home() {
                   <SelectValue placeholder={isLoadingNotionPages ? "Loading pages…" : "Workspace root (default)"} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Workspace root (default)</SelectItem>
+                  <SelectItem value="__root__">Workspace root (default)</SelectItem>
                   {notionPages.map((page) => (
                     <SelectItem key={page.id} value={page.id}>
                       {page.title}
