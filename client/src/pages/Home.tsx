@@ -85,6 +85,9 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isSendingToNotion, setIsSendingToNotion] = useState(false);
+  const [notionParentPageId, setNotionParentPageId] = useState<string>(() => {
+    return localStorage.getItem("notion-parent-page-id") ?? "";
+  });
   const [isRecordingRequested, setIsRecordingRequested] = useState(false);
   const [editNotebookOpen, setEditNotebookOpen] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -206,6 +209,12 @@ export default function Home() {
   const { data: timeline = [], isLoading: isLoadingTimeline } = useQuery<TimelineItem[]>({
     queryKey: ["/api/notebooks", selectedNotebookId, "timeline"],
     enabled: !!selectedNotebookId,
+  });
+
+  const { data: notionPages = [], isLoading: isLoadingNotionPages } = useQuery<{ id: string; title: string }[]>({
+    queryKey: ["/api/notion/pages"],
+    enabled: settingsOpen,
+    staleTime: 60_000,
   });
 
   const displayedTimeline = newestFirst ? [...timeline].reverse() : timeline;
@@ -569,7 +578,9 @@ export default function Home() {
 
     setIsSendingToNotion(true);
     try {
-      const res = await apiRequest("POST", `/api/notebooks/${selectedNotebookId}/export/notion`, undefined);
+      const res = await apiRequest("POST", `/api/notebooks/${selectedNotebookId}/export/notion`, {
+        parentPageId: notionParentPageId || null,
+      });
       const data = await res.json() as { url: string; pageId: string };
       toast({
         title: "Sent to Notion!",
@@ -1199,6 +1210,36 @@ export default function Home() {
                   </Select>
                 </div>
               )}
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <Label>Notion Export Destination</Label>
+              <Select
+                value={notionParentPageId}
+                onValueChange={(v) => {
+                  setNotionParentPageId(v);
+                  if (v) {
+                    localStorage.setItem("notion-parent-page-id", v);
+                  } else {
+                    localStorage.removeItem("notion-parent-page-id");
+                  }
+                }}
+              >
+                <SelectTrigger data-testid="select-notion-parent-page" disabled={isLoadingNotionPages}>
+                  <SelectValue placeholder={isLoadingNotionPages ? "Loading pages…" : "Workspace root (default)"} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Workspace root (default)</SelectItem>
+                  {notionPages.map((page) => (
+                    <SelectItem key={page.id} value={page.id}>
+                      {page.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">
+                Where to create new pages when exporting to Notion
+              </p>
             </div>
           </div>
         </DialogContent>

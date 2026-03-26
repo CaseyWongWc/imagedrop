@@ -115,6 +115,34 @@ async function appendBlocksInChunks(
   }
 }
 
+export interface NotionPage {
+  id: string;
+  title: string;
+}
+
+export async function listNotionPages(): Promise<NotionPage[]> {
+  const res = await connectors.proxy("notion", "/v1/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filter: { property: "object", value: "page" }, page_size: 50 }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(`Notion search error: ${JSON.stringify(err)}`);
+  }
+  const data = await res.json() as { results: Array<Record<string, unknown>> };
+  return data.results.map((page) => {
+    const props = page.properties as Record<string, unknown> | undefined;
+    let title = "Untitled";
+    if (props) {
+      const titleProp = (props.title ?? props.Name ?? props.name) as { title?: Array<{ plain_text?: string }> } | undefined;
+      const firstText = titleProp?.title?.[0]?.plain_text;
+      if (firstText) title = firstText;
+    }
+    return { id: page.id as string, title };
+  });
+}
+
 export interface NotionExportResult {
   url: string;
   pageId: string;
@@ -125,7 +153,8 @@ export async function exportNotebookToNotion(
   notebookClass: string | null | undefined,
   notebookDate: Date,
   timeline: TimelineItem[],
-  baseUrl: string
+  baseUrl: string,
+  parentPageId?: string | null
 ): Promise<NotionExportResult> {
   const dateStr = new Date(notebookDate).toLocaleDateString();
   const pageTitle = [
@@ -139,8 +168,12 @@ export async function exportNotebookToNotion(
   const firstBlocks = buildBlocks(timeline, baseUrl).slice(0, 100);
   const remainingBlocks = buildBlocks(timeline, baseUrl).slice(100);
 
+  const parent = parentPageId
+    ? { type: "page_id", page_id: parentPageId }
+    : { type: "workspace", workspace: true };
+
   const body = {
-    parent: { type: "workspace", workspace: true },
+    parent,
     properties: {
       title: [{ type: "text", text: { content: pageTitle } }],
     },

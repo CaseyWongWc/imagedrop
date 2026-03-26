@@ -57,7 +57,8 @@ Notebooks:
   PATCH /api/notebooks/:id - Update notebook (title, className)
   DELETE /api/notebooks/:id - Delete notebook (cascades to content)
   GET /api/notebooks/:id/timeline - Get merged timeline items
-  POST /api/notebooks/:id/export/notion - Export notebook to a new Notion page
+  GET /api/notion/pages - List accessible Notion pages (for parent page selection)
+  POST /api/notebooks/:id/export/notion - Export notebook to a new Notion page (body: { parentPageId?: string | null })
 
 Images:
   POST /api/objects/upload - Get pre-signed upload URL

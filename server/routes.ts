@@ -18,7 +18,7 @@ import {
 } from "@shared/schema";
 import { TranscriptionService } from "./transcription";
 import { VisionService } from "./vision";
-import { exportNotebookToNotion } from "./notion";
+import { exportNotebookToNotion, listNotionPages } from "./notion";
 import { randomUUID } from "crypto";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -449,6 +449,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ NOTION EXPORT ROUTE ============
 
+  // List accessible Notion pages for parent page selection
+  app.get("/api/notion/pages", async (_req, res) => {
+    try {
+      const pages = await listNotionPages();
+      res.json(pages);
+    } catch (error: any) {
+      console.error("Error listing Notion pages:", error);
+      res.status(500).json({ error: error?.message || "Failed to list Notion pages" });
+    }
+  });
+
   // Export notebook to Notion
   app.post("/api/notebooks/:id/export/notion", async (req, res) => {
     try {
@@ -490,12 +501,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const baseUrl = `${req.protocol}://${req.get("host")}`;
 
+      const { parentPageId } = req.body as { parentPageId?: string | null };
+
       const result = await exportNotebookToNotion(
         notebook.title,
         notebook.className,
         notebook.createdAt,
         timeline,
-        baseUrl
+        baseUrl,
+        parentPageId ?? null
       );
 
       res.json({ url: result.url, pageId: result.pageId });
