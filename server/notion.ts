@@ -104,6 +104,7 @@ async function appendBlocksInChunks(
       `/v1/blocks/${pageId}/children`,
       {
         method: "PATCH",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ children: chunk }),
       }
     );
@@ -148,6 +149,7 @@ export async function exportNotebookToNotion(
 
   const res = await connectors.proxy("notion", "/v1/pages", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 
