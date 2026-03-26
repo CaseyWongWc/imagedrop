@@ -37,6 +37,7 @@ import {
   ChevronsDown,
   ChevronsUp,
   Sparkles,
+  Copy,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
@@ -686,6 +687,12 @@ export default function Home() {
     }
   };
 
+  const copyMarkdown = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      toast({ description: "Copied to clipboard" });
+    });
+  };
+
   const formatTime = (date: Date) => {
     return new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
@@ -1037,6 +1044,15 @@ export default function Home() {
                       <Sparkles className="w-3.5 h-3.5 text-violet-500 shrink-0" />
                       <span className="text-xs font-medium text-violet-600 dark:text-violet-400">AI Summary</span>
                       <span className="text-xs text-muted-foreground ml-auto">{formatTime(s.timestamp)}</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => copyMarkdown(s.text)}
+                        aria-label="Copy summary as markdown"
+                        data-testid={`button-copy-summary-${s.id}`}
+                      >
+                        <Copy className="w-3 h-3" />
+                      </Button>
                     </div>
                     <div className="px-3 py-3 text-xs text-foreground">
                       <MarkdownRenderer content={s.text} />
@@ -1075,6 +1091,18 @@ export default function Home() {
                       <span className="text-muted-foreground text-xs truncate flex-1 text-right max-w-[50%]">
                         {img.fileName}
                       </span>
+                      {img.ocrText && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="shrink-0"
+                          onClick={() => copyMarkdown(img.ocrText!)}
+                          aria-label="Copy OCR text as markdown"
+                          data-testid={`button-copy-ocr-${img.id}`}
+                        >
+                          <Copy className="w-3 h-3" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
@@ -1109,9 +1137,20 @@ export default function Home() {
                     data-testid={`card-transcription-${item.id}`}
                   >
                     <p className="whitespace-pre-wrap">{trans.text}</p>
-                    <p className="text-xs text-muted-foreground mt-2">
-                      {formatTime(item.timestamp)}
-                    </p>
+                    <div className="flex items-center justify-between mt-2">
+                      <p className="text-xs text-muted-foreground">
+                        {formatTime(item.timestamp)}
+                      </p>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => copyMarkdown(trans.text)}
+                        aria-label="Copy transcript as markdown"
+                        data-testid={`button-copy-transcription-${item.id}`}
+                      >
+                        <Copy className="w-3 h-3" />
+                      </Button>
+                    </div>
                   </div>
                 );
               } else {
