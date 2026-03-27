@@ -100,6 +100,9 @@ export default function Home() {
   const [notionParentPageId, setNotionParentPageId] = useState<string>(() => {
     return localStorage.getItem("notion-parent-page-id") ?? "";
   });
+  const [notionIncludeDescriptions, setNotionIncludeDescriptions] = useState<boolean>(() => {
+    return localStorage.getItem("notion-include-descriptions") !== "false";
+  });
   const [autoSummaryMinutes, setAutoSummaryMinutes] = useState<number>(() => {
     return parseInt(localStorage.getItem("auto-summary-minutes") ?? "0", 10);
   });
@@ -660,6 +663,7 @@ export default function Home() {
     try {
       const res = await apiRequest("POST", `/api/notebooks/${selectedNotebookId}/export/notion`, {
         parentPageId: notionParentPageId || null,
+        includeDescriptions: notionIncludeDescriptions,
       });
       const data = await res.json() as { url: string; pageId: string };
       toast({
@@ -1410,6 +1414,24 @@ export default function Home() {
               </Select>
               <p className="text-sm text-muted-foreground">
                 Where to create new pages when exporting to Notion
+              </p>
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="notion-include-descriptions">Include image descriptions in Notion export</Label>
+                <Switch
+                  id="notion-include-descriptions"
+                  checked={notionIncludeDescriptions}
+                  onCheckedChange={(v) => {
+                    setNotionIncludeDescriptions(v);
+                    localStorage.setItem("notion-include-descriptions", String(v));
+                  }}
+                  data-testid="switch-notion-include-descriptions"
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Append OCR text and image descriptions as formatted blocks under each photo
               </p>
             </div>
           </div>

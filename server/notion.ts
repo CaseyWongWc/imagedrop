@@ -6,7 +6,127 @@ const connectors = new ReplitConnectors();
 
 type NotionBlock = Record<string, unknown>;
 
-function buildBlocks(timeline: TimelineItem[], baseUrl: string): NotionBlock[] {
+type RichText = {
+  type: "text";
+  text: { content: string };
+  annotations?: { bold?: boolean; italic?: boolean };
+};
+
+function splitText(text: string, maxLen: number): string[] {
+  const chunks: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    chunks.push(text.slice(i, i + maxLen));
+    i += maxLen;
+  }
+  return chunks.length > 0 ? chunks : [""];
+}
+
+function parseInline(line: string): RichText[] {
+  const parts = line.split(/(\*\*[^*]+\*\*)/g);
+  const richTexts: RichText[] = [];
+  for (const part of parts) {
+    if (!part) continue;
+    if (part.startsWith("**") && part.endsWith("**")) {
+      const content = part.slice(2, -2);
+      for (const chunk of splitText(content, 2000)) {
+        richTexts.push({ type: "text", text: { content: chunk }, annotations: { bold: true } });
+      }
+    } else {
+      for (const chunk of splitText(part, 2000)) {
+        richTexts.push({ type: "text", text: { content: chunk } });
+      }
+    }
+  }
+  return richTexts.length > 0 ? richTexts : [{ type: "text", text: { content: "" } }];
+}
+
+function markdownToNotionBlocks(markdown: string): NotionBlock[] {
+  const blocks: NotionBlock[] = [];
+  const lines = markdown.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Fenced code block
+    if (line.startsWith("```")) {
+      const lang = line.slice(3).trim() || "plain text";
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing ```
+      const code = codeLines.join("\n");
+      for (const chunk of splitText(code, 2000)) {
+        blocks.push({
+          object: "block",
+          type: "code",
+          code: {
+            language: lang,
+            rich_text: [{ type: "text", text: { content: chunk } }],
+          },
+        });
+      }
+      continue;
+    }
+
+    // Bullet list (- or *)
+    if (line.startsWith("- ") || line.startsWith("* ")) {
+      blocks.push({
+        object: "block",
+        type: "bulleted_list_item",
+        bulleted_list_item: { rich_text: parseInline(line.slice(2)) },
+      });
+      i++;
+      continue;
+    }
+
+    // Heading 3
+    if (line.startsWith("### ")) {
+      blocks.push({
+        object: "block",
+        type: "heading_3",
+        heading_3: { rich_text: parseInline(line.slice(4)) },
+      });
+      i++;
+      continue;
+    }
+
+    // Heading 2
+    if (line.startsWith("## ")) {
+      blocks.push({
+        object: "block",
+        type: "heading_2",
+        heading_2: { rich_text: parseInline(line.slice(3)) },
+      });
+      i++;
+      continue;
+    }
+
+    // Empty line → skip
+    if (line.trim() === "") {
+      i++;
+      continue;
+    }
+
+    // Regular paragraph (handles inline **bold**)
+    blocks.push({
+      object: "block",
+      type: "paragraph",
+      paragraph: { rich_text: parseInline(line) },
+    });
+    i++;
+  }
+  return blocks;
+}
+
+function buildBlocks(
+  timeline: TimelineItem[],
+  baseUrl: string,
+  includeDescriptions: boolean
+): NotionBlock[] {
   const blocks: NotionBlock[] = [];
 
   for (const item of timeline) {
@@ -30,6 +150,10 @@ function buildBlocks(timeline: TimelineItem[], baseUrl: string): NotionBlock[] {
           ],
         },
       });
+
+      if (includeDescriptions && img.ocrText) {
+        blocks.push(...markdownToNotionBlocks(img.ocrText));
+      }
     } else if (item.type === "transcription") {
       const trans = item.content as { text: string };
       const chunks = splitText(trans.text, 2000);
@@ -80,16 +204,6 @@ function buildBlocks(timeline: TimelineItem[], baseUrl: string): NotionBlock[] {
   }
 
   return blocks;
-}
-
-function splitText(text: string, maxLen: number): string[] {
-  const chunks: string[] = [];
-  let i = 0;
-  while (i < text.length) {
-    chunks.push(text.slice(i, i + maxLen));
-    i += maxLen;
-  }
-  return chunks.length > 0 ? chunks : [""];
 }
 
 async function appendBlocksInChunks(
@@ -154,7 +268,8 @@ export async function exportNotebookToNotion(
   notebookDate: Date,
   timeline: TimelineItem[],
   baseUrl: string,
-  parentPageId?: string | null
+  parentPageId?: string | null,
+  includeDescriptions = true
 ): Promise<NotionExportResult> {
   const dateStr = new Date(notebookDate).toLocaleDateString();
   const pageTitle = [
@@ -165,8 +280,9 @@ export async function exportNotebookToNotion(
     .filter(Boolean)
     .join(" — ");
 
-  const firstBlocks = buildBlocks(timeline, baseUrl).slice(0, 100);
-  const remainingBlocks = buildBlocks(timeline, baseUrl).slice(100);
+  const allBlocks = buildBlocks(timeline, baseUrl, includeDescriptions);
+  const firstBlocks = allBlocks.slice(0, 100);
+  const remainingBlocks = allBlocks.slice(100);
 
   const parent = parentPageId
     ? { type: "page_id", page_id: parentPageId }

@@ -501,7 +501,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const baseUrl = `${req.protocol}://${req.get("host")}`;
 
-      const { parentPageId } = req.body as { parentPageId?: string | null };
+      const { parentPageId, includeDescriptions } = req.body as {
+        parentPageId?: string | null;
+        includeDescriptions?: boolean;
+      };
 
       const result = await exportNotebookToNotion(
         notebook.title,
@@ -509,7 +512,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notebook.createdAt,
         timeline,
         baseUrl,
-        parentPageId ?? null
+        parentPageId ?? null,
+        includeDescriptions !== false
       );
 
       res.json({ url: result.url, pageId: result.pageId });
