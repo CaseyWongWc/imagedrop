@@ -41,6 +41,8 @@ function parseInline(line: string): RichText[] {
   return richTexts.length > 0 ? richTexts : [{ type: "text", text: { content: "" } }];
 }
 
+const NOTION_CODE_LANGUAGES = new Set(["abap","arduino","bash","basic","c","clojure","coffeescript","c++","c#","css","dart","diff","docker","elixir","elm","erlang","flow","fortran","f#","gherkin","glsl","go","graphql","groovy","haskell","html","java","javascript","json","julia","kotlin","latex","less","lisp","livescript","lua","makefile","markdown","markup","matlab","mermaid","nix","objective-c","ocaml","pascal","perl","php","plain text","powershell","prolog","protobuf","python","r","reason","ruby","rust","sass","scala","scheme","scss","shell","sql","swift","typescript","vb.net","verilog","vhdl","visual basic","webassembly","xml","yaml","java/c/c++/c#"]);
+
 function markdownToNotionBlocks(markdown: string): NotionBlock[] {
   const blocks: NotionBlock[] = [];
   const lines = markdown.split("\n");
@@ -50,7 +52,8 @@ function markdownToNotionBlocks(markdown: string): NotionBlock[] {
 
     // Fenced code block
     if (line.startsWith("```")) {
-      const lang = line.slice(3).trim() || "plain text";
+      const rawLang = line.slice(3).trim().toLowerCase();
+      const lang = NOTION_CODE_LANGUAGES.has(rawLang) ? rawLang : "plain text";
       const codeLines: string[] = [];
       i++;
       while (i < lines.length && !lines[i].startsWith("```")) {
