@@ -36,6 +36,7 @@ type Job = { notebookId: string; item: SyncItem };
 
 const queues = new Map<string, Job[]>();
 const running = new Set<string>();
+const backfilling = new Set<string>();
 
 function itemToTimelineItem(item: SyncItem): { timeline: TimelineItem; baseUrl: string } | null {
   if (item.kind === "image") {
@@ -267,12 +268,19 @@ async function runQueue(notebookId: string): Promise<void> {
   }
 }
 
-export function enqueueSync(notebookId: string, item: SyncItem): void {
+export function enqueueSync(
+  notebookId: string,
+  item: SyncItem,
+  opts: { force?: boolean } = {}
+): void {
   // Fire-and-forget; check the per-notebook toggle before queueing.
   (async () => {
     try {
       const notebook = await storage.getNotebook(notebookId);
-      if (!notebook || notebook.notionSyncEnabled === false) return;
+      if (!notebook) return;
+      // Manual operations (e.g. backfill) bypass the live-sync toggle so that
+      // disabling auto-sync doesn't silently drop user-initiated work.
+      if (!opts.force && notebook.notionSyncEnabled === false) return;
       // Skip rename/delete if there isn't a synced page yet — nothing to mirror.
       if ((item.kind === "rename" || item.kind === "delete") && !notebook.notionPageId) {
         return;
@@ -296,4 +304,137 @@ export function getSyncStatus(notebookId: string): "idle" | "syncing" {
   const queue = queues.get(notebookId);
   const pending = (queue?.length ?? 0) > 0;
   return pending || running.has(notebookId) ? "syncing" : "idle";
+}
+
+export function getSyncQueueLength(notebookId: string): number {
+  return queues.get(notebookId)?.length ?? 0;
+}
+
+export function isBackfilling(notebookId: string): boolean {
+  return backfilling.has(notebookId);
+}
+
+function inflightKeys(notebookId: string): Set<string> {
+  const keys = new Set<string>();
+  const queue = queues.get(notebookId);
+  if (!queue) return keys;
+  for (const job of queue) {
+    const k = mappingKeyForItem(job.item);
+    if (k) keys.add(`${k.kind}:${k.localId}`);
+  }
+  return keys;
+}
+
+export type BackfillResult =
+  | { ok: true; queued: number }
+  | { ok: false; reason: "no-page" | "not-found" | "already-running" };
+
+// Atomically compute and enqueue all unsynced historical items for a notebook
+// in chronological order. Idempotent against both persisted mappings and
+// items already sitting in the in-memory queue. Refuses to start if a
+// backfill is already in progress for this notebook.
+export async function backfillNotebook(
+  notebookId: string,
+  baseUrl: string
+): Promise<BackfillResult> {
+  if (backfilling.has(notebookId)) {
+    return { ok: false, reason: "already-running" };
+  }
+  backfilling.add(notebookId);
+  try {
+    const notebook = await storage.getNotebook(notebookId);
+    if (!notebook) return { ok: false, reason: "not-found" };
+    if (!notebook.notionPageId) return { ok: false, reason: "no-page" };
+
+    const [
+      imagesList,
+      transcriptionsList,
+      checkpointsList,
+      syncedImages,
+      syncedTranscriptions,
+      syncedCheckpoints,
+      syncedOcr,
+    ] = await Promise.all([
+      storage.getImagesByNotebook(notebookId),
+      storage.getTranscriptionsByNotebook(notebookId),
+      storage.getCheckpointsByNotebook(notebookId),
+      storage.getSyncedLocalIds(notebookId, "image"),
+      storage.getSyncedLocalIds(notebookId, "transcription"),
+      storage.getSyncedLocalIds(notebookId, "checkpoint"),
+      storage.getSyncedLocalIds(notebookId, "ocr"),
+    ]);
+
+    const inflight = inflightKeys(notebookId);
+
+    type Pending = { ts: number; order: number; item: SyncItem };
+    const pending: Pending[] = [];
+    let order = 0;
+
+    for (const img of imagesList) {
+      const ts = new Date(img.uploadedAt).getTime();
+      if (!syncedImages.has(img.id) && !inflight.has(`image:${img.id}`)) {
+        pending.push({
+          ts,
+          order: order++,
+          item: { kind: "image", content: img, baseUrl },
+        });
+      }
+      if (
+        img.ocrText &&
+        img.ocrText.trim().length > 0 &&
+        !syncedOcr.has(img.id) &&
+        !inflight.has(`ocr:${img.id}`)
+      ) {
+        pending.push({
+          ts: ts + 1,
+          order: order++,
+          item: {
+            kind: "ocrText",
+            imageId: img.id,
+            imageFileName: img.fileName,
+            text: img.ocrText,
+          },
+        });
+      }
+    }
+    for (const t of transcriptionsList) {
+      if (syncedTranscriptions.has(t.id) || inflight.has(`transcription:${t.id}`)) continue;
+      pending.push({
+        ts: new Date(t.createdAt).getTime(),
+        order: order++,
+        item: { kind: "transcription", content: t },
+      });
+    }
+    for (const c of checkpointsList) {
+      if (syncedCheckpoints.has(c.id) || inflight.has(`checkpoint:${c.id}`)) continue;
+      pending.push({
+        ts: new Date(c.createdAt).getTime(),
+        order: order++,
+        item: { kind: "checkpoint", content: c },
+      });
+    }
+
+    pending.sort((a, b) => (a.ts - b.ts) || (a.order - b.order));
+
+    // Push synchronously to preserve sorted order — bypassing enqueueSync
+    // (which is async and would race).
+    let queue = queues.get(notebookId);
+    if (!queue) {
+      queue = [];
+      queues.set(notebookId, queue);
+    }
+    for (const p of pending) {
+      queue.push({ notebookId, item: p.item });
+    }
+
+    if (pending.length > 0) {
+      runQueue(notebookId).catch((e) => {
+        console.error(`Notion sync queue error for ${notebookId}:`, e);
+      });
+    }
+
+    return { ok: true, queued: pending.length };
+  } finally {
+    backfilling.delete(notebookId);
+  }
 }

@@ -54,6 +54,7 @@ export interface IStorage {
   recordNotionBlocks(notebookId: string, localId: string, kind: string, blockIds: string[]): Promise<void>;
   getNotionBlockIds(notebookId: string, localId: string, kind: string): Promise<string[]>;
   deleteNotionBlockMapping(notebookId: string, localId: string, kind: string): Promise<void>;
+  getSyncedLocalIds(notebookId: string, kind: string): Promise<Set<string>>;
 }
 
 export class DbStorage implements IStorage {
@@ -243,6 +244,19 @@ export class DbStorage implements IStorage {
         )
       );
     return row?.blockIds ?? [];
+  }
+
+  async getSyncedLocalIds(notebookId: string, kind: string): Promise<Set<string>> {
+    const rows = await db
+      .select({ localId: notionBlockMappings.localId })
+      .from(notionBlockMappings)
+      .where(
+        and(
+          eq(notionBlockMappings.notebookId, notebookId),
+          eq(notionBlockMappings.kind, kind)
+        )
+      );
+    return new Set(rows.map((r) => r.localId));
   }
 
   async deleteNotionBlockMapping(

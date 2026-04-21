@@ -41,6 +41,7 @@ import {
   CloudOff,
   CloudUpload,
   Cloud,
+  History,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
@@ -241,6 +242,8 @@ export default function Home() {
     notionSyncError: string | null;
     notionSyncEnabled: boolean;
     notionSyncStatus: "idle" | "syncing";
+    notionSyncPending: number;
+    notionBackfilling: boolean;
   };
   const { data: notebookDetail } = useQuery<NotebookDetail>({
     queryKey: ["/api/notebooks", selectedNotebookId],
@@ -392,6 +395,34 @@ export default function Home() {
         description: vars.enabled
           ? "New captures will be mirrored to Notion."
           : "New captures will stay local. Use Send to Notion to push manually.",
+      });
+    },
+  });
+
+  const backfillNotionMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/notebooks/${id}/notion/backfill`, {});
+      return (await res.json()) as { queued: number };
+    },
+    onSuccess: (data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", id] });
+      if (data.queued === 0) {
+        toast({
+          title: "Already up to date",
+          description: "No historical items needed backfilling.",
+        });
+      } else {
+        toast({
+          title: "Backfill started",
+          description: `Queued ${data.queued} item${data.queued === 1 ? "" : "s"} to append to Notion.`,
+        });
+      }
+    },
+    onError: (e: any) => {
+      toast({
+        title: "Backfill failed",
+        description: e?.message || "Could not backfill to Notion",
+        variant: "destructive",
       });
     },
   });
@@ -924,14 +955,17 @@ export default function Home() {
                 );
               }
               if (status === "syncing") {
+                const pending = notebookDetail?.notionSyncPending ?? 0;
                 return (
                   <div
                     className="flex items-center gap-1 px-2 text-xs text-muted-foreground"
                     data-testid="indicator-syncing"
-                    title="Syncing to Notion…"
+                    title={pending > 0 ? `Syncing to Notion… ${pending} item${pending === 1 ? "" : "s"} pending` : "Syncing to Notion…"}
                   >
                     <CloudUpload className="w-3 h-3 animate-pulse" />
-                    <span className="hidden sm:inline">Syncing…</span>
+                    <span className="hidden sm:inline">
+                      Syncing{pending > 0 ? ` (${pending})` : ""}…
+                    </span>
                   </div>
                 );
               }
@@ -996,6 +1030,31 @@ export default function Home() {
                 <SiNotion className="w-4 h-4" />
               )}
             </Button>
+            {selectedNotebookId && notebookDetail?.notionPageId && timeline.length > 0 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => backfillNotionMutation.mutate(selectedNotebookId)}
+                disabled={
+                  backfillNotionMutation.isPending ||
+                  notebookDetail.notionBackfilling ||
+                  notebookDetail.notionSyncStatus === "syncing"
+                }
+                aria-label="Backfill historical items to Notion"
+                title={
+                  notebookDetail.notionSyncStatus === "syncing"
+                    ? "Wait for current sync to finish, then backfill historical items"
+                    : "Backfill historical items to Notion"
+                }
+                data-testid="button-backfill-notion"
+              >
+                {backfillNotionMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <History className="w-4 h-4" />
+                )}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"

@@ -19,7 +19,7 @@ import {
 import { TranscriptionService } from "./transcription";
 import { VisionService } from "./vision";
 import { exportNotebookToNotion, listNotionPages } from "./notion";
-import { enqueueSync, getSyncStatus } from "./notionSync";
+import { enqueueSync, getSyncStatus, getSyncQueueLength, backfillNotebook, isBackfilling } from "./notionSync";
 import { randomUUID } from "crypto";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -93,7 +93,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!notebook) {
         return res.status(404).json({ error: "Notebook not found" });
       }
-      res.json({ ...notebook, notionSyncStatus: getSyncStatus(notebook.id) });
+      res.json({
+        ...notebook,
+        notionSyncStatus: getSyncStatus(notebook.id),
+        notionSyncPending: getSyncQueueLength(notebook.id),
+        notionBackfilling: isBackfilling(notebook.id),
+      });
     } catch (error) {
       console.error("Error fetching notebook:", error);
       res.status(500).json({ error: "Failed to fetch notebook" });
@@ -534,6 +539,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error deleting summary:", error);
       res.status(500).json({ error: "Failed to delete summary" });
+    }
+  });
+
+  // Backfill historical items into the live-synced Notion page. Idempotent
+  // (skips items already mapped or already queued) and serialized per
+  // notebook so concurrent calls cannot enqueue duplicates.
+  app.post("/api/notebooks/:id/notion/backfill", async (req, res) => {
+    try {
+      const notebookId = req.params.id;
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const result = await backfillNotebook(notebookId, baseUrl);
+      if (!result.ok) {
+        if (result.reason === "not-found") {
+          return res.status(404).json({ error: "Notebook not found" });
+        }
+        if (result.reason === "no-page") {
+          return res.status(400).json({
+            error: "Notebook has no live-synced Notion page. Use Send to Notion first.",
+          });
+        }
+        if (result.reason === "already-running") {
+          return res.status(409).json({ error: "A backfill is already in progress for this notebook." });
+        }
+      } else {
+        return res.json({ queued: result.queued });
+      }
+    } catch (error: any) {
+      console.error("Error backfilling to Notion:", error);
+      res.status(500).json({ error: error?.message || "Failed to backfill to Notion" });
     }
   });
 
