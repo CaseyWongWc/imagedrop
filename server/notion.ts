@@ -43,7 +43,7 @@ function parseInline(line: string): RichText[] {
 
 const NOTION_CODE_LANGUAGES = new Set(["abap","arduino","bash","basic","c","clojure","coffeescript","c++","c#","css","dart","diff","docker","elixir","elm","erlang","flow","fortran","f#","gherkin","glsl","go","graphql","groovy","haskell","html","java","javascript","json","julia","kotlin","latex","less","lisp","livescript","lua","makefile","markdown","markup","matlab","mermaid","nix","objective-c","ocaml","pascal","perl","php","plain text","powershell","prolog","protobuf","python","r","reason","ruby","rust","sass","scala","scheme","scss","shell","sql","swift","typescript","vb.net","verilog","vhdl","visual basic","webassembly","xml","yaml","java/c/c++/c#"]);
 
-function markdownToNotionBlocks(markdown: string): NotionBlock[] {
+export function markdownToNotionBlocks(markdown: string): NotionBlock[] {
   const blocks: NotionBlock[] = [];
   const lines = markdown.split("\n");
   let i = 0;
@@ -125,7 +125,7 @@ function markdownToNotionBlocks(markdown: string): NotionBlock[] {
   return blocks;
 }
 
-function buildBlocks(
+export function buildBlocks(
   timeline: TimelineItem[],
   baseUrl: string,
   includeDescriptions: boolean
@@ -209,7 +209,7 @@ function buildBlocks(
   return blocks;
 }
 
-async function appendBlocksInChunks(
+export async function appendBlocksInChunks(
   pageId: string,
   blocks: NotionBlock[]
 ): Promise<void> {

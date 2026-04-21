@@ -38,6 +38,9 @@ import {
   ChevronsUp,
   Sparkles,
   Copy,
+  CloudOff,
+  CloudUpload,
+  Cloud,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
@@ -233,6 +236,17 @@ export default function Home() {
     enabled: !!selectedNotebookId,
   });
 
+  type NotebookDetail = Notebook & {
+    notionPageId: string | null;
+    notionSyncError: string | null;
+    notionSyncStatus: "idle" | "syncing";
+  };
+  const { data: notebookDetail } = useQuery<NotebookDetail>({
+    queryKey: ["/api/notebooks", selectedNotebookId],
+    enabled: !!selectedNotebookId,
+    refetchInterval: 3000,
+  });
+
   const { data: notionPages = [], isLoading: isLoadingNotionPages } = useQuery<{ id: string; title: string }[]>({
     queryKey: ["/api/notion/pages"],
     enabled: settingsOpen,
@@ -283,7 +297,7 @@ export default function Home() {
       setIsGeneratingSummary(true);
       lastSummaryAtRef.current = now;
       try {
-        const res = await apiRequest("POST", "/api/summary", { entries });
+        const res = await apiRequest("POST", "/api/summary", { entries, notebookId: selectedNotebookId });
         const data = await res.json() as { summary: string };
         setSummaryCards(prev => [...prev, {
           id: crypto.randomUUID(),
@@ -659,6 +673,13 @@ export default function Home() {
   const handleSendToNotion = async () => {
     if (!selectedNotebookId) return;
 
+    // If a live-synced page already exists, open it directly in a new tab.
+    if (notebookDetail?.notionPageId) {
+      const pid = notebookDetail.notionPageId.replace(/-/g, "");
+      window.open(`https://www.notion.so/${pid}`, "_blank", "noopener,noreferrer");
+      return;
+    }
+
     setIsSendingToNotion(true);
     try {
       const res = await apiRequest("POST", `/api/notebooks/${selectedNotebookId}/export/notion`, {
@@ -868,12 +889,55 @@ export default function Home() {
                 <span className="hidden sm:inline">Summarizing…</span>
               </div>
             )}
+            {(() => {
+              const hasPage = !!notebookDetail?.notionPageId;
+              const err = notebookDetail?.notionSyncError;
+              const status = notebookDetail?.notionSyncStatus;
+              if (err) {
+                return (
+                  <div
+                    className="flex items-center gap-1 px-2 text-xs text-destructive"
+                    data-testid="indicator-sync-error"
+                    title={err}
+                  >
+                    <CloudOff className="w-3 h-3" />
+                    <span className="hidden sm:inline">Sync error</span>
+                  </div>
+                );
+              }
+              if (status === "syncing") {
+                return (
+                  <div
+                    className="flex items-center gap-1 px-2 text-xs text-muted-foreground"
+                    data-testid="indicator-syncing"
+                    title="Syncing to Notion…"
+                  >
+                    <CloudUpload className="w-3 h-3 animate-pulse" />
+                    <span className="hidden sm:inline">Syncing…</span>
+                  </div>
+                );
+              }
+              if (hasPage) {
+                return (
+                  <div
+                    className="flex items-center gap-1 px-2 text-xs text-muted-foreground"
+                    data-testid="indicator-synced"
+                    title="All captures synced to Notion"
+                  >
+                    <Cloud className="w-3 h-3" />
+                    <span className="hidden sm:inline">Synced</span>
+                  </div>
+                );
+              }
+              return null;
+            })()}
             <Button
               variant="ghost"
               size="icon"
               onClick={handleSendToNotion}
-              disabled={isSendingToNotion || timeline.length === 0}
-              aria-label="Send to Notion"
+              disabled={isSendingToNotion || (timeline.length === 0 && !notebookDetail?.notionPageId)}
+              aria-label={notebookDetail?.notionPageId ? "Open in Notion" : "Send to Notion"}
+              title={notebookDetail?.notionPageId ? "Open in Notion" : "Send to Notion"}
               data-testid="button-send-to-notion"
             >
               {isSendingToNotion ? (

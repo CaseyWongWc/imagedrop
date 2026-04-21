@@ -9,10 +9,14 @@ export const notebooks = pgTable("notebooks", {
   title: text("title").notNull(),
   className: text("class_name"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  notionPageId: text("notion_page_id"),
+  notionSyncError: text("notion_sync_error"),
 });
 
 export const insertNotebookSchema = createInsertSchema(notebooks).omit({
   createdAt: true,
+  notionPageId: true,
+  notionSyncError: true,
 });
 
 export type InsertNotebook = z.infer<typeof insertNotebookSchema>;

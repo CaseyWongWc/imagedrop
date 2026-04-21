@@ -19,6 +19,7 @@ import {
 import { TranscriptionService } from "./transcription";
 import { VisionService } from "./vision";
 import { exportNotebookToNotion, listNotionPages } from "./notion";
+import { enqueueSync, getSyncStatus } from "./notionSync";
 import { randomUUID } from "crypto";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -92,7 +93,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!notebook) {
         return res.status(404).json({ error: "Notebook not found" });
       }
-      res.json(notebook);
+      res.json({ ...notebook, notionSyncStatus: getSyncStatus(notebook.id) });
     } catch (error) {
       console.error("Error fetching notebook:", error);
       res.status(500).json({ error: "Failed to fetch notebook" });
@@ -197,10 +198,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const image = await storage.createImage(validatedData);
       res.json(image);
 
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      // Live Notion sync for the image
+      enqueueSync(image.notebookId, { kind: "image", content: image, baseUrl });
+
       // Trigger background OCR (non-blocking)
-      const imageUrl = `${req.protocol}://${req.get("host")}${image.objectPath}`;
+      const imageUrl = `${baseUrl}${image.objectPath}`;
       visionService.extractTextFromUrl(imageUrl).then(async (ocrText) => {
         await storage.updateImageOcr(image.id, ocrText);
+        if (ocrText && ocrText.trim().length > 0) {
+          enqueueSync(image.notebookId, {
+            kind: "ocrText",
+            imageFileName: image.fileName,
+            text: ocrText,
+          });
+        }
       }).catch((err) => {
         console.error(`Background OCR failed for image ${image.id}:`, err);
       });
@@ -221,6 +233,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = `${req.protocol}://${req.get("host")}${image.objectPath}`;
       const ocrText = await visionService.extractTextFromUrl(imageUrl);
       const updated = await storage.updateImageOcr(image.id, ocrText);
+      if (ocrText && ocrText.trim().length > 0) {
+        enqueueSync(image.notebookId, {
+          kind: "ocrText",
+          imageFileName: image.fileName,
+          text: ocrText,
+        });
+      }
       res.json(updated);
     } catch (error) {
       console.error("Error running OCR:", error);
@@ -243,6 +262,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const imageUrl = `${req.protocol}://${req.get("host")}${img.objectPath}`;
             const ocrText = await visionService.extractTextFromUrl(imageUrl);
             await storage.updateImageOcr(img.id, ocrText);
+            if (ocrText && ocrText.trim().length > 0) {
+              enqueueSync(img.notebookId, {
+                kind: "ocrText",
+                imageFileName: img.fileName,
+                text: ocrText,
+              });
+            }
           } catch (err) {
             console.error(`Batch OCR failed for image ${img.id}:`, err);
           }
@@ -325,6 +351,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = insertTranscriptionSchema.parse(req.body);
       const transcription = await storage.createTranscription(validatedData);
+      enqueueSync(transcription.notebookId, { kind: "transcription", content: transcription });
       res.json(transcription);
     } catch (error) {
       console.error("Error creating transcription:", error);
@@ -396,7 +423,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         text: result.text,
         notebookId,
       });
-      
+
+      enqueueSync(notebookId, { kind: "transcription", content: transcription });
+
       res.json(transcription);
     } catch (error) {
       console.error("Error transcribing audio:", error);
@@ -418,6 +447,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
       });
       const checkpoint = await storage.createCheckpoint(validatedData);
+      enqueueSync(checkpoint.notebookId, { kind: "checkpoint", content: checkpoint });
       res.json(checkpoint);
     } catch (error) {
       console.error("Error creating checkpoint:", error);
@@ -468,6 +498,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const notebook = await storage.getNotebook(notebookId);
       if (!notebook) {
         return res.status(404).json({ error: "Notebook not found" });
+      }
+
+      // If a live-synced page already exists, return it instead of creating a duplicate.
+      if (notebook.notionPageId) {
+        const pid = notebook.notionPageId.replace(/-/g, "");
+        return res.json({
+          url: `https://www.notion.so/${pid}`,
+          pageId: notebook.notionPageId,
+          alreadySynced: true,
+        });
       }
 
       const [imagesList, transcriptionsList, checkpointsList] = await Promise.all([
@@ -525,7 +565,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // AI summary endpoint
   app.post("/api/summary", async (req, res) => {
-    const { entries } = req.body as { entries: Array<{ text: string; timestamp: string }> };
+    const { entries, notebookId } = req.body as { entries: Array<{ text: string; timestamp: string }>; notebookId?: string };
     if (!entries || entries.length === 0) {
       return res.status(400).json({ error: "No entries provided" });
     }
@@ -553,6 +593,14 @@ ${formatted}`,
         max_tokens: 1024,
       });
       const summary = response.choices[0]?.message?.content?.trim() ?? "";
+      if (notebookId && summary) {
+        enqueueSync(notebookId, {
+          kind: "summary",
+          id: randomUUID(),
+          text: summary,
+          timestamp: new Date(),
+        });
+      }
       res.json({ summary });
     } catch (error: any) {
       console.error("Summary generation error:", error);
@@ -562,7 +610,16 @@ ${formatted}`,
         .filter(b => b.length > 2)
         .slice(0, 6)
         .join("\n");
-      res.json({ summary: `**Summary**\n\n${bullets || "No content to summarize."}` });
+      const fallback = `**Summary**\n\n${bullets || "No content to summarize."}`;
+      if (notebookId) {
+        enqueueSync(notebookId, {
+          kind: "summary",
+          id: randomUUID(),
+          text: fallback,
+          timestamp: new Date(),
+        });
+      }
+      res.json({ summary: fallback });
     }
   });
 

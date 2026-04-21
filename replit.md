@@ -160,7 +160,12 @@ Everything in this phase is built and working.
 - Mobile-first responsive design with icon-only action bar (Camera, Upload, Mic, Checkpoint)
 - Object storage for photos (Replit Object Storage / GCS-backed, permanent public URLs)
 
-### P1.5: Notion Export (COMPLETED)
+### P1.5: Notion Export & Live Sync (COMPLETED)
+- **Live Notion sync**: every captured photo, transcription, checkpoint, OCR result, and auto-summary is appended to a notebook-specific Notion page within seconds. The page is created automatically on first capture (titled `notebook title — class — date`) and remembered via `notebooks.notionPageId`.
+- Per-notebook async queue in `server/notionSync.ts` preserves order and retries with exponential backoff. Last error is stored in `notebooks.notionSyncError`.
+- Notebook header shows sync status indicator (Synced / Syncing / Error with tooltip).
+- Manual "Send to Notion" button now opens the existing live-synced page if one exists (no duplicate page).
+
 - Notion integration via Replit Connectors SDK (`@replit/connectors-sdk`)
 - "Send to Notion" button in notebook header (Notion icon)
 - Creates a new Notion page titled: `notebook title — class — date`

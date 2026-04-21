@@ -21,6 +21,8 @@ export interface IStorage {
   getNotebook(id: string): Promise<Notebook | undefined>;
   getAllNotebooks(): Promise<Notebook[]>;
   updateNotebook(id: string, data: { title?: string; className?: string | null }): Promise<Notebook | undefined>;
+  setNotebookNotionPage(id: string, notionPageId: string | null): Promise<Notebook | undefined>;
+  setNotebookSyncError(id: string, error: string | null): Promise<Notebook | undefined>;
   deleteNotebook(id: string): Promise<void>;
 
   // Image operations
@@ -68,6 +70,24 @@ export class DbStorage implements IStorage {
     if (data.title !== undefined) updateData.title = data.title;
     if (data.className !== undefined) updateData.className = data.className;
     const [updated] = await db.update(notebooks).set(updateData).where(eq(notebooks.id, id)).returning();
+    return updated;
+  }
+
+  async setNotebookNotionPage(id: string, notionPageId: string | null): Promise<Notebook | undefined> {
+    const [updated] = await db
+      .update(notebooks)
+      .set({ notionPageId })
+      .where(eq(notebooks.id, id))
+      .returning();
+    return updated;
+  }
+
+  async setNotebookSyncError(id: string, error: string | null): Promise<Notebook | undefined> {
+    const [updated] = await db
+      .update(notebooks)
+      .set({ notionSyncError: error })
+      .where(eq(notebooks.id, id))
+      .returning();
     return updated;
   }
 
