@@ -250,6 +250,25 @@ export async function deleteNotionBlock(blockId: string): Promise<void> {
   }
 }
 
+export async function updateHeading3Block(
+  blockId: string,
+  text: string
+): Promise<void> {
+  const res = await connectors.proxy("notion", `/v1/blocks/${blockId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      heading_3: {
+        rich_text: [{ type: "text", text: { content: text } }],
+      },
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Failed to update heading block ${blockId}: ${JSON.stringify(err)}`);
+  }
+}
+
 export async function updatePageTitle(
   pageId: string,
   title: string

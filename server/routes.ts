@@ -396,6 +396,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update transcription text
+  app.patch("/api/transcriptions/:id", async (req, res) => {
+    try {
+      const { text } = req.body as { text?: unknown };
+      if (typeof text !== "string" || text.trim().length === 0) {
+        return res.status(400).json({ error: "text is required" });
+      }
+      const updated = await storage.updateTranscription(req.params.id, text);
+      if (!updated) {
+        return res.status(404).json({ error: "Transcription not found" });
+      }
+      enqueueSync(updated.notebookId, {
+        kind: "edit",
+        targetKind: "transcription",
+        content: updated,
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating transcription:", error);
+      res.status(500).json({ error: "Failed to update transcription" });
+    }
+  });
+
   // Delete transcription
   app.delete("/api/transcriptions/:id", async (req, res) => {
     try {
@@ -497,6 +520,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching checkpoints:", error);
       res.status(500).json({ error: "Failed to fetch checkpoints" });
+    }
+  });
+
+  // Update checkpoint label
+  app.patch("/api/checkpoints/:id", async (req, res) => {
+    try {
+      const { label } = req.body as { label?: unknown };
+      if (label !== null && typeof label !== "string") {
+        return res.status(400).json({ error: "label must be a string or null" });
+      }
+      const updated = await storage.updateCheckpoint(
+        req.params.id,
+        label === null ? null : (label as string)
+      );
+      if (!updated) {
+        return res.status(404).json({ error: "Checkpoint not found" });
+      }
+      enqueueSync(updated.notebookId, {
+        kind: "edit",
+        targetKind: "checkpoint",
+        content: updated,
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating checkpoint:", error);
+      res.status(500).json({ error: "Failed to update checkpoint" });
     }
   });
 

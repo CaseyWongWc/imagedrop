@@ -41,6 +41,7 @@ export interface IStorage {
   getTranscription(id: string): Promise<Transcription | undefined>;
   getAllTranscriptions(): Promise<Transcription[]>;
   getTranscriptionsByNotebook(notebookId: string): Promise<Transcription[]>;
+  updateTranscription(id: string, text: string): Promise<Transcription | undefined>;
   deleteTranscription(id: string): Promise<void>;
   deleteAllTranscriptions(): Promise<void>;
 
@@ -48,6 +49,7 @@ export interface IStorage {
   createCheckpoint(checkpoint: InsertCheckpoint): Promise<Checkpoint>;
   getCheckpoint(id: string): Promise<Checkpoint | undefined>;
   getCheckpointsByNotebook(notebookId: string): Promise<Checkpoint[]>;
+  updateCheckpoint(id: string, label: string | null): Promise<Checkpoint | undefined>;
   deleteCheckpoint(id: string): Promise<void>;
 
   // Notion block mapping operations (for live edit/delete sync)
@@ -170,6 +172,15 @@ export class DbStorage implements IStorage {
       .orderBy(asc(transcriptions.createdAt));
   }
 
+  async updateTranscription(id: string, text: string): Promise<Transcription | undefined> {
+    const [updated] = await db
+      .update(transcriptions)
+      .set({ text })
+      .where(eq(transcriptions.id, id))
+      .returning();
+    return updated;
+  }
+
   async deleteTranscription(id: string): Promise<void> {
     await db.delete(transcriptions).where(eq(transcriptions.id, id));
   }
@@ -195,6 +206,15 @@ export class DbStorage implements IStorage {
       .from(checkpoints)
       .where(eq(checkpoints.notebookId, notebookId))
       .orderBy(asc(checkpoints.createdAt));
+  }
+
+  async updateCheckpoint(id: string, label: string | null): Promise<Checkpoint | undefined> {
+    const [updated] = await db
+      .update(checkpoints)
+      .set({ label })
+      .where(eq(checkpoints.id, id))
+      .returning();
+    return updated;
   }
 
   async deleteCheckpoint(id: string): Promise<void> {

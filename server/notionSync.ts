@@ -4,6 +4,7 @@ import {
   buildBlocks,
   deleteNotionBlock,
   markdownToNotionBlocks,
+  updateHeading3Block,
   updatePageTitle,
 } from "./notion";
 import { ReplitConnectors } from "@replit/connectors-sdk";
@@ -30,6 +31,8 @@ export type SyncItem =
   | { kind: "summary"; id: string; text: string; timestamp: Date }
   | { kind: "ocrText"; imageId: string; imageFileName: string; text: string }
   | { kind: "delete"; targetKind: MappingKind; localId: string }
+  | { kind: "edit"; targetKind: "transcription"; content: Transcription }
+  | { kind: "edit"; targetKind: "checkpoint"; content: Checkpoint }
   | { kind: "rename" };
 
 type Job = { notebookId: string; item: SyncItem };
@@ -174,6 +177,65 @@ async function processOne(notebookId: string, item: SyncItem): Promise<void> {
     return;
   }
 
+  // Handle edit: mirror updated content to the synced page.
+  // - Checkpoint: PATCH the existing heading block in place so document
+  //   order is preserved (matches the task's "in place" requirement).
+  // - Transcription: append the new paragraph blocks first, atomically swap
+  //   the mapping, then best-effort delete the old blocks. This ordering
+  //   guarantees no data is lost if Notion calls fail mid-flight — a retry
+  //   will simply re-do the work (potentially leaving a few orphaned blocks
+  //   in the worst case, never an empty mapping).
+  if (item.kind === "edit") {
+    const previous = await storage.getNotionBlockIds(
+      notebookId,
+      item.content.id,
+      item.targetKind
+    );
+    // No prior sync — nothing to mirror; the create path will handle it
+    // when the item is first synced.
+    if (previous.length === 0) return;
+
+    if (item.targetKind === "checkpoint") {
+      // buildBlocks for a checkpoint produces [divider, heading_3]. We only
+      // need to update the heading. Find it; if mapping was recorded with a
+      // different shape, fall back to the last block.
+      const cp = item.content as Checkpoint;
+      const headingBlockId = previous.length >= 2 ? previous[1] : previous[previous.length - 1];
+      const ts = new Date(cp.createdAt).toLocaleString();
+      const text = `Checkpoint: ${cp.label || "Checkpoint"} — ${ts}`;
+      await updateHeading3Block(headingBlockId, text);
+      return;
+    }
+
+    // Transcription: append-first, then swap mapping, then cleanup.
+    const pageId = await ensurePage(notebookId);
+    const synthetic: SyncItem = {
+      kind: "transcription",
+      content: item.content as Transcription,
+    };
+    const blocks = blocksForItem(synthetic);
+    if (blocks.length === 0) return;
+    const createdIds = await appendBlocksInChunks(pageId, blocks);
+    if (createdIds.length === 0) return;
+    // Atomically replace the mapping (delete-then-insert in one storage op).
+    await storage.recordNotionBlocks(
+      notebookId,
+      item.content.id,
+      item.targetKind,
+      createdIds
+    );
+    // Best-effort cleanup of the previously appended blocks. Failures here
+    // only leave orphans on the Notion page; the mapping is already correct.
+    for (const blockId of previous) {
+      try {
+        await deleteNotionBlock(blockId);
+      } catch (e) {
+        console.error(`Failed to delete previous transcription block ${blockId}:`, e);
+      }
+    }
+    return;
+  }
+
   // Handle delete: remove tracked blocks and the mapping.
   if (item.kind === "delete") {
     const blockIds = await storage.getNotionBlockIds(notebookId, item.localId, item.targetKind);
@@ -281,8 +343,11 @@ export function enqueueSync(
       // Manual operations (e.g. backfill) bypass the live-sync toggle so that
       // disabling auto-sync doesn't silently drop user-initiated work.
       if (!opts.force && notebook.notionSyncEnabled === false) return;
-      // Skip rename/delete if there isn't a synced page yet — nothing to mirror.
-      if ((item.kind === "rename" || item.kind === "delete") && !notebook.notionPageId) {
+      // Skip rename/delete/edit if there isn't a synced page yet — nothing to mirror.
+      if (
+        (item.kind === "rename" || item.kind === "delete" || item.kind === "edit") &&
+        !notebook.notionPageId
+      ) {
         return;
       }
       let queue = queues.get(notebookId);
