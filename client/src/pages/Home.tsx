@@ -107,6 +107,9 @@ export default function Home() {
   const [notionIncludeDescriptions, setNotionIncludeDescriptions] = useState<boolean>(() => {
     return localStorage.getItem("notion-include-descriptions") !== "false";
   });
+  const [defaultNotionSyncEnabled, setDefaultNotionSyncEnabled] = useState<boolean>(() => {
+    return localStorage.getItem("default-notion-sync-enabled") !== "false";
+  });
   const [autoSummaryMinutes, setAutoSummaryMinutes] = useState<number>(() => {
     return parseInt(localStorage.getItem("auto-summary-minutes") ?? "0", 10);
   });
@@ -338,7 +341,7 @@ export default function Home() {
 
   // Mutations
   const createNotebookMutation = useMutation({
-    mutationFn: async (data: { title: string; className?: string }) => {
+    mutationFn: async (data: { title: string; className?: string; notionSyncEnabled?: boolean }) => {
       return await apiRequest("POST", "/api/notebooks", data);
     },
     onSuccess: async (res) => {
@@ -876,6 +879,7 @@ export default function Home() {
                 onClick={() => createNotebookMutation.mutate({
                   title: newNotebookTitle || `Notebook ${new Date().toLocaleDateString()}`,
                   className: newNotebookClass || undefined,
+                  notionSyncEnabled: defaultNotionSyncEnabled,
                 })}
                 disabled={createNotebookMutation.isPending}
                 data-testid="button-confirm-create-notebook"
@@ -1575,6 +1579,24 @@ export default function Home() {
               </Select>
               <p className="text-sm text-muted-foreground">
                 Automatically generate an AI summary of recent captures at regular intervals
+              </p>
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="default-notion-sync">Sync new notebooks to Notion by default</Label>
+                <Switch
+                  id="default-notion-sync"
+                  checked={defaultNotionSyncEnabled}
+                  onCheckedChange={(v) => {
+                    setDefaultNotionSyncEnabled(v);
+                    localStorage.setItem("default-notion-sync-enabled", String(v));
+                  }}
+                  data-testid="switch-default-notion-sync"
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                When on, newly created notebooks will mirror their content to Notion automatically. You can still toggle sync per notebook later.
               </p>
             </div>
             <Separator />

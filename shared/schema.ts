@@ -18,7 +18,6 @@ export const insertNotebookSchema = createInsertSchema(notebooks).omit({
   createdAt: true,
   notionPageId: true,
   notionSyncError: true,
-  notionSyncEnabled: true,
 });
 
 export type InsertNotebook = z.infer<typeof insertNotebookSchema>;
