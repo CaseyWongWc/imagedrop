@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { relations } from "drizzle-orm";
@@ -11,12 +11,14 @@ export const notebooks = pgTable("notebooks", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   notionPageId: text("notion_page_id"),
   notionSyncError: text("notion_sync_error"),
+  notionSyncEnabled: boolean("notion_sync_enabled").notNull().default(true),
 });
 
 export const insertNotebookSchema = createInsertSchema(notebooks).omit({
   createdAt: true,
   notionPageId: true,
   notionSyncError: true,
+  notionSyncEnabled: true,
 });
 
 export type InsertNotebook = z.infer<typeof insertNotebookSchema>;

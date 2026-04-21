@@ -103,11 +103,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update notebook
   app.patch("/api/notebooks/:id", async (req, res) => {
     try {
-      const { title, className } = req.body;
-      if (!title && className === undefined) {
+      const { title, className, notionSyncEnabled } = req.body;
+      if (!title && className === undefined && notionSyncEnabled === undefined) {
         return res.status(400).json({ error: "No fields to update" });
       }
-      const updated = await storage.updateNotebook(req.params.id, { title, className });
+      if (notionSyncEnabled !== undefined && typeof notionSyncEnabled !== "boolean") {
+        return res.status(400).json({ error: "notionSyncEnabled must be a boolean" });
+      }
+      const updated = await storage.updateNotebook(req.params.id, {
+        title,
+        className,
+        notionSyncEnabled,
+      });
       if (!updated) {
         return res.status(404).json({ error: "Notebook not found" });
       }

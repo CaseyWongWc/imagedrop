@@ -239,6 +239,7 @@ export default function Home() {
   type NotebookDetail = Notebook & {
     notionPageId: string | null;
     notionSyncError: string | null;
+    notionSyncEnabled: boolean;
     notionSyncStatus: "idle" | "syncing";
   };
   const { data: notebookDetail } = useQuery<NotebookDetail>({
@@ -374,6 +375,22 @@ export default function Home() {
       setEditNotebookOpen(false);
       toast({
         title: "Notebook updated",
+      });
+    },
+  });
+
+  const toggleNotionSyncMutation = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      return await apiRequest("PATCH", `/api/notebooks/${id}`, { notionSyncEnabled: enabled });
+    },
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", vars.id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks"] });
+      toast({
+        title: vars.enabled ? "Live Notion sync on" : "Live Notion sync off",
+        description: vars.enabled
+          ? "New captures will be mirrored to Notion."
+          : "New captures will stay local. Use Send to Notion to push manually.",
       });
     },
   });
@@ -931,6 +948,38 @@ export default function Home() {
               }
               return null;
             })()}
+            {selectedNotebookId && notebookDetail && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() =>
+                  toggleNotionSyncMutation.mutate({
+                    id: selectedNotebookId,
+                    enabled: !notebookDetail.notionSyncEnabled,
+                  })
+                }
+                disabled={toggleNotionSyncMutation.isPending}
+                aria-label={
+                  notebookDetail.notionSyncEnabled
+                    ? "Turn off live Notion sync"
+                    : "Turn on live Notion sync"
+                }
+                title={
+                  notebookDetail.notionSyncEnabled
+                    ? "Live Notion sync is ON — click to disable"
+                    : "Live Notion sync is OFF — click to enable"
+                }
+                data-testid="button-toggle-notion-sync"
+                className="toggle-elevate"
+                {...(notebookDetail.notionSyncEnabled ? { "data-active": "true" } : {})}
+              >
+                {notebookDetail.notionSyncEnabled ? (
+                  <Cloud className="w-4 h-4" />
+                ) : (
+                  <CloudOff className="w-4 h-4 text-muted-foreground" />
+                )}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"

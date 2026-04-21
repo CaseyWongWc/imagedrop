@@ -20,7 +20,7 @@ export interface IStorage {
   createNotebook(notebook: InsertNotebook): Promise<Notebook>;
   getNotebook(id: string): Promise<Notebook | undefined>;
   getAllNotebooks(): Promise<Notebook[]>;
-  updateNotebook(id: string, data: { title?: string; className?: string | null }): Promise<Notebook | undefined>;
+  updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean }): Promise<Notebook | undefined>;
   setNotebookNotionPage(id: string, notionPageId: string | null): Promise<Notebook | undefined>;
   setNotebookSyncError(id: string, error: string | null): Promise<Notebook | undefined>;
   deleteNotebook(id: string): Promise<void>;
@@ -65,10 +65,14 @@ export class DbStorage implements IStorage {
     return db.select().from(notebooks).orderBy(desc(notebooks.createdAt));
   }
 
-  async updateNotebook(id: string, data: { title?: string; className?: string | null }): Promise<Notebook | undefined> {
+  async updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean }): Promise<Notebook | undefined> {
     const updateData: Record<string, any> = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.className !== undefined) updateData.className = data.className;
+    if (data.notionSyncEnabled !== undefined) updateData.notionSyncEnabled = data.notionSyncEnabled;
+    if (Object.keys(updateData).length === 0) {
+      return this.getNotebook(id);
+    }
     const [updated] = await db.update(notebooks).set(updateData).where(eq(notebooks.id, id)).returning();
     return updated;
   }

@@ -201,16 +201,24 @@ async function runQueue(notebookId: string): Promise<void> {
 }
 
 export function enqueueSync(notebookId: string, item: SyncItem): void {
-  let queue = queues.get(notebookId);
-  if (!queue) {
-    queue = [];
-    queues.set(notebookId, queue);
-  }
-  queue.push({ notebookId, item });
-  // Fire-and-forget
-  runQueue(notebookId).catch((e) => {
-    console.error(`Notion sync queue error for ${notebookId}:`, e);
-  });
+  // Fire-and-forget; check the per-notebook toggle before queueing.
+  (async () => {
+    try {
+      const notebook = await storage.getNotebook(notebookId);
+      if (!notebook || notebook.notionSyncEnabled === false) return;
+      let queue = queues.get(notebookId);
+      if (!queue) {
+        queue = [];
+        queues.set(notebookId, queue);
+      }
+      queue.push({ notebookId, item });
+      runQueue(notebookId).catch((e) => {
+        console.error(`Notion sync queue error for ${notebookId}:`, e);
+      });
+    } catch (e) {
+      console.error(`enqueueSync failed for ${notebookId}:`, e);
+    }
+  })();
 }
 
 export function getSyncStatus(notebookId: string): "idle" | "syncing" {
