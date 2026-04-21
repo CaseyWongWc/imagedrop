@@ -101,6 +101,28 @@ export const checkpointsRelations = relations(checkpoints, ({ one }) => ({
   }),
 }));
 
+// Mapping from local items (image/transcription/checkpoint/ocr/summary) to
+// the Notion block IDs that represent them on the synced page. Used to mirror
+// edits/deletes (and re-runs of OCR) back to Notion instead of duplicating.
+export const notionBlockMappings = pgTable("notion_block_mappings", {
+  id: varchar("id").primaryKey(),
+  notebookId: varchar("notebook_id")
+    .references(() => notebooks.id, { onDelete: "cascade" })
+    .notNull(),
+  localId: text("local_id").notNull(),
+  kind: text("kind").notNull(),
+  blockIds: text("block_ids").array().notNull(),
+});
+
+export type NotionBlockMapping = typeof notionBlockMappings.$inferSelect;
+
+export const notionBlockMappingsRelations = relations(notionBlockMappings, ({ one }) => ({
+  notebook: one(notebooks, {
+    fields: [notionBlockMappings.notebookId],
+    references: [notebooks.id],
+  }),
+}));
+
 // Timeline item type for unified view
 export type TimelineItem = {
   id: string;

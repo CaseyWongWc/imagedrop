@@ -1,10 +1,12 @@
-import { eq, desc, asc } from "drizzle-orm";
+import { eq, desc, asc, and } from "drizzle-orm";
 import { db } from "./db";
+import { randomUUID } from "crypto";
 import {
   notebooks,
   images,
   transcriptions,
   checkpoints,
+  notionBlockMappings,
   type Notebook,
   type InsertNotebook,
   type Image,
@@ -47,6 +49,11 @@ export interface IStorage {
   getCheckpoint(id: string): Promise<Checkpoint | undefined>;
   getCheckpointsByNotebook(notebookId: string): Promise<Checkpoint[]>;
   deleteCheckpoint(id: string): Promise<void>;
+
+  // Notion block mapping operations (for live edit/delete sync)
+  recordNotionBlocks(notebookId: string, localId: string, kind: string, blockIds: string[]): Promise<void>;
+  getNotionBlockIds(notebookId: string, localId: string, kind: string): Promise<string[]>;
+  deleteNotionBlockMapping(notebookId: string, localId: string, kind: string): Promise<void>;
 }
 
 export class DbStorage implements IStorage {
@@ -191,6 +198,67 @@ export class DbStorage implements IStorage {
 
   async deleteCheckpoint(id: string): Promise<void> {
     await db.delete(checkpoints).where(eq(checkpoints.id, id));
+  }
+
+  // Notion block mapping operations
+  async recordNotionBlocks(
+    notebookId: string,
+    localId: string,
+    kind: string,
+    blockIds: string[]
+  ): Promise<void> {
+    if (blockIds.length === 0) return;
+    // Replace any existing mapping for the same (notebookId, localId, kind).
+    await db
+      .delete(notionBlockMappings)
+      .where(
+        and(
+          eq(notionBlockMappings.notebookId, notebookId),
+          eq(notionBlockMappings.localId, localId),
+          eq(notionBlockMappings.kind, kind)
+        )
+      );
+    await db.insert(notionBlockMappings).values({
+      id: randomUUID(),
+      notebookId,
+      localId,
+      kind,
+      blockIds,
+    });
+  }
+
+  async getNotionBlockIds(
+    notebookId: string,
+    localId: string,
+    kind: string
+  ): Promise<string[]> {
+    const [row] = await db
+      .select()
+      .from(notionBlockMappings)
+      .where(
+        and(
+          eq(notionBlockMappings.notebookId, notebookId),
+          eq(notionBlockMappings.localId, localId),
+          eq(notionBlockMappings.kind, kind)
+        )
+      );
+    return row?.blockIds ?? [];
+  }
+
+  async deleteNotionBlockMapping(
+    notebookId: string,
+    localId: string,
+    kind: string
+  ): Promise<void> {
+    await db
+      .delete(notionBlockMappings)
+      .where(
+        and(
+          eq(notionBlockMappings.notebookId, notebookId),
+          eq(notionBlockMappings.localId, localId),
+          eq(notionBlockMappings.kind, kind)
+        )
+      );
   }
 }
 

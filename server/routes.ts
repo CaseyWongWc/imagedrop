@@ -110,6 +110,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (notionSyncEnabled !== undefined && typeof notionSyncEnabled !== "boolean") {
         return res.status(400).json({ error: "notionSyncEnabled must be a boolean" });
       }
+      const before = await storage.getNotebook(req.params.id);
       const updated = await storage.updateNotebook(req.params.id, {
         title,
         className,
@@ -117,6 +118,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       if (!updated) {
         return res.status(404).json({ error: "Notebook not found" });
+      }
+      // If title or class actually changed, mirror the rename to Notion.
+      if (
+        before &&
+        (before.title !== updated.title || before.className !== updated.className)
+      ) {
+        enqueueSync(updated.id, { kind: "rename" });
       }
       res.json(updated);
     } catch (error) {
@@ -216,6 +224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (ocrText && ocrText.trim().length > 0) {
           enqueueSync(image.notebookId, {
             kind: "ocrText",
+            imageId: image.id,
             imageFileName: image.fileName,
             text: ocrText,
           });
@@ -243,6 +252,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (ocrText && ocrText.trim().length > 0) {
         enqueueSync(image.notebookId, {
           kind: "ocrText",
+          imageId: image.id,
           imageFileName: image.fileName,
           text: ocrText,
         });
@@ -272,6 +282,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (ocrText && ocrText.trim().length > 0) {
               enqueueSync(img.notebookId, {
                 kind: "ocrText",
+                imageId: img.id,
                 imageFileName: img.fileName,
                 text: ocrText,
               });
@@ -331,6 +342,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await storage.deleteImage(req.params.id);
+      // Mirror the delete to the synced Notion page (image block + any OCR blocks).
+      enqueueSync(image.notebookId, { kind: "delete", targetKind: "image", localId: image.id });
+      enqueueSync(image.notebookId, { kind: "delete", targetKind: "ocr", localId: image.id });
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting image:", error);
@@ -380,7 +394,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete transcription
   app.delete("/api/transcriptions/:id", async (req, res) => {
     try {
+      const existing = await storage.getTranscription(req.params.id);
       await storage.deleteTranscription(req.params.id);
+      if (existing) {
+        enqueueSync(existing.notebookId, {
+          kind: "delete",
+          targetKind: "transcription",
+          localId: existing.id,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting transcription:", error);
@@ -476,11 +498,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete checkpoint
   app.delete("/api/checkpoints/:id", async (req, res) => {
     try {
+      const existing = await storage.getCheckpoint(req.params.id);
       await storage.deleteCheckpoint(req.params.id);
+      if (existing) {
+        enqueueSync(existing.notebookId, {
+          kind: "delete",
+          targetKind: "checkpoint",
+          localId: existing.id,
+        });
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting checkpoint:", error);
       res.status(500).json({ error: "Failed to delete checkpoint" });
+    }
+  });
+
+  // Delete a summary card from the synced Notion page. Summaries are not
+  // persisted server-side, so the client passes the summary ID generated at
+  // creation time and the corresponding Notion blocks (tracked in
+  // notion_block_mappings) are removed.
+  app.delete("/api/notebooks/:notebookId/summaries/:summaryId", async (req, res) => {
+    try {
+      const { notebookId, summaryId } = req.params;
+      const notebook = await storage.getNotebook(notebookId);
+      if (!notebook) {
+        return res.status(404).json({ error: "Notebook not found" });
+      }
+      enqueueSync(notebookId, {
+        kind: "delete",
+        targetKind: "summary",
+        localId: summaryId,
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting summary:", error);
+      res.status(500).json({ error: "Failed to delete summary" });
     }
   });
 
@@ -572,7 +625,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // AI summary endpoint
   app.post("/api/summary", async (req, res) => {
-    const { entries, notebookId } = req.body as { entries: Array<{ text: string; timestamp: string }>; notebookId?: string };
+    const { entries, notebookId, summaryId } = req.body as {
+      entries: Array<{ text: string; timestamp: string }>;
+      notebookId?: string;
+      summaryId?: string;
+    };
     if (!entries || entries.length === 0) {
       return res.status(400).json({ error: "No entries provided" });
     }
@@ -600,15 +657,16 @@ ${formatted}`,
         max_tokens: 1024,
       });
       const summary = response.choices[0]?.message?.content?.trim() ?? "";
+      const finalSummaryId = summaryId || randomUUID();
       if (notebookId && summary) {
         enqueueSync(notebookId, {
           kind: "summary",
-          id: randomUUID(),
+          id: finalSummaryId,
           text: summary,
           timestamp: new Date(),
         });
       }
-      res.json({ summary });
+      res.json({ summary, summaryId: finalSummaryId });
     } catch (error: any) {
       console.error("Summary generation error:", error);
       // Fallback: simple extractive summary
@@ -618,15 +676,16 @@ ${formatted}`,
         .slice(0, 6)
         .join("\n");
       const fallback = `**Summary**\n\n${bullets || "No content to summarize."}`;
+      const finalSummaryId = summaryId || randomUUID();
       if (notebookId) {
         enqueueSync(notebookId, {
           kind: "summary",
-          id: randomUUID(),
+          id: finalSummaryId,
           text: fallback,
           timestamp: new Date(),
         });
       }
-      res.json({ summary: fallback });
+      res.json({ summary: fallback, summaryId: finalSummaryId });
     }
   });
 

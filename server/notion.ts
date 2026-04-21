@@ -212,8 +212,9 @@ export function buildBlocks(
 export async function appendBlocksInChunks(
   pageId: string,
   blocks: NotionBlock[]
-): Promise<void> {
+): Promise<string[]> {
   const CHUNK_SIZE = 100;
+  const createdIds: string[] = [];
   for (let i = 0; i < blocks.length; i += CHUNK_SIZE) {
     const chunk = blocks.slice(i, i + CHUNK_SIZE);
     const res = await connectors.proxy(
@@ -229,6 +230,42 @@ export async function appendBlocksInChunks(
       const err = await res.json();
       throw new Error(`Failed to append blocks: ${JSON.stringify(err)}`);
     }
+    const data = (await res.json()) as { results?: Array<{ id: string }> };
+    if (data.results) {
+      for (const block of data.results) createdIds.push(block.id);
+    }
+  }
+  return createdIds;
+}
+
+export async function deleteNotionBlock(blockId: string): Promise<void> {
+  const res = await connectors.proxy("notion", `/v1/blocks/${blockId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    // 404 means the block was already removed in Notion — treat as success.
+    if (res.status === 404) return;
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Failed to delete block ${blockId}: ${JSON.stringify(err)}`);
+  }
+}
+
+export async function updatePageTitle(
+  pageId: string,
+  title: string
+): Promise<void> {
+  const res = await connectors.proxy("notion", `/v1/pages/${pageId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      properties: {
+        title: { title: [{ type: "text", text: { content: title } }] },
+      },
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Failed to update page title: ${JSON.stringify(err)}`);
   }
 }
 

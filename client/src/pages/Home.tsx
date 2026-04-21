@@ -298,10 +298,11 @@ export default function Home() {
       setIsGeneratingSummary(true);
       lastSummaryAtRef.current = now;
       try {
-        const res = await apiRequest("POST", "/api/summary", { entries, notebookId: selectedNotebookId });
-        const data = await res.json() as { summary: string };
+        const summaryId = crypto.randomUUID();
+        const res = await apiRequest("POST", "/api/summary", { entries, notebookId: selectedNotebookId, summaryId });
+        const data = await res.json() as { summary: string; summaryId?: string };
         setSummaryCards(prev => [...prev, {
-          id: crypto.randomUUID(),
+          id: data.summaryId ?? summaryId,
           type: "summary",
           timestamp: new Date(),
           text: data.summary,
@@ -1169,6 +1170,25 @@ export default function Home() {
                         data-testid={`button-copy-summary-${s.id}`}
                       >
                         <Copy className="w-3 h-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          setSummaryCards(prev => prev.filter(c => c.id !== s.id));
+                          if (selectedNotebookId) {
+                            apiRequest(
+                              "DELETE",
+                              `/api/notebooks/${selectedNotebookId}/summaries/${s.id}`
+                            ).catch((err) => {
+                              console.error("Failed to delete summary on server:", err);
+                            });
+                          }
+                        }}
+                        aria-label="Delete summary"
+                        data-testid={`button-delete-summary-${s.id}`}
+                      >
+                        <Trash2 className="w-3 h-3" />
                       </Button>
                     </div>
                     <div className="px-3 py-3 text-xs text-foreground">

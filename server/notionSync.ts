@@ -2,7 +2,9 @@ import { storage } from "./storage";
 import {
   appendBlocksInChunks,
   buildBlocks,
+  deleteNotionBlock,
   markdownToNotionBlocks,
+  updatePageTitle,
 } from "./notion";
 import { ReplitConnectors } from "@replit/connectors-sdk";
 import type {
@@ -14,12 +16,21 @@ import type {
 
 const connectors = new ReplitConnectors();
 
+export type MappingKind =
+  | "image"
+  | "transcription"
+  | "checkpoint"
+  | "summary"
+  | "ocr";
+
 export type SyncItem =
   | { kind: "image"; content: Image; baseUrl: string }
   | { kind: "transcription"; content: Transcription }
   | { kind: "checkpoint"; content: Checkpoint }
   | { kind: "summary"; id: string; text: string; timestamp: Date }
-  | { kind: "ocrText"; imageFileName: string; text: string };
+  | { kind: "ocrText"; imageId: string; imageFileName: string; text: string }
+  | { kind: "delete"; targetKind: MappingKind; localId: string }
+  | { kind: "rename" };
 
 type Job = { notebookId: string; item: SyncItem };
 
@@ -135,11 +146,67 @@ async function ensurePage(notebookId: string): Promise<string> {
   return page.id;
 }
 
+function mappingKeyForItem(item: SyncItem): { kind: MappingKind; localId: string } | null {
+  switch (item.kind) {
+    case "image":
+      return { kind: "image", localId: item.content.id };
+    case "transcription":
+      return { kind: "transcription", localId: item.content.id };
+    case "checkpoint":
+      return { kind: "checkpoint", localId: item.content.id };
+    case "summary":
+      return { kind: "summary", localId: item.id };
+    case "ocrText":
+      return { kind: "ocr", localId: item.imageId };
+    default:
+      return null;
+  }
+}
+
 async function processOne(notebookId: string, item: SyncItem): Promise<void> {
+  // Handle rename: just update the Notion page title using current notebook state.
+  if (item.kind === "rename") {
+    const notebook = await storage.getNotebook(notebookId);
+    if (!notebook || !notebook.notionPageId) return;
+    const title = buildPageTitle(notebook.title, notebook.className, notebook.createdAt);
+    await updatePageTitle(notebook.notionPageId, title);
+    return;
+  }
+
+  // Handle delete: remove tracked blocks and the mapping.
+  if (item.kind === "delete") {
+    const blockIds = await storage.getNotionBlockIds(notebookId, item.localId, item.targetKind);
+    if (blockIds.length === 0) return;
+    for (const blockId of blockIds) {
+      await deleteNotionBlock(blockId);
+    }
+    await storage.deleteNotionBlockMapping(notebookId, item.localId, item.targetKind);
+    return;
+  }
+
+  // For OCR re-runs, drop any previously appended OCR blocks first so we
+  // replace rather than duplicate them.
+  if (item.kind === "ocrText") {
+    const previous = await storage.getNotionBlockIds(notebookId, item.imageId, "ocr");
+    for (const blockId of previous) {
+      try {
+        await deleteNotionBlock(blockId);
+      } catch (e) {
+        console.error(`Failed to delete previous OCR block ${blockId}:`, e);
+      }
+    }
+    await storage.deleteNotionBlockMapping(notebookId, item.imageId, "ocr");
+  }
+
   const pageId = await ensurePage(notebookId);
   const blocks = blocksForItem(item);
   if (blocks.length === 0) return;
-  await appendBlocksInChunks(pageId, blocks);
+  const createdIds = await appendBlocksInChunks(pageId, blocks);
+
+  const mapping = mappingKeyForItem(item);
+  if (mapping && createdIds.length > 0) {
+    await storage.recordNotionBlocks(notebookId, mapping.localId, mapping.kind, createdIds);
+  }
 }
 
 async function runQueue(notebookId: string): Promise<void> {
@@ -206,6 +273,10 @@ export function enqueueSync(notebookId: string, item: SyncItem): void {
     try {
       const notebook = await storage.getNotebook(notebookId);
       if (!notebook || notebook.notionSyncEnabled === false) return;
+      // Skip rename/delete if there isn't a synced page yet — nothing to mirror.
+      if ((item.kind === "rename" || item.kind === "delete") && !notebook.notionPageId) {
+        return;
+      }
       let queue = queues.get(notebookId);
       if (!queue) {
         queue = [];
