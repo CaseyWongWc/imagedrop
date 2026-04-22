@@ -15,12 +15,217 @@ import {
   type Transcription,
   type Checkpoint,
   type TimelineItem,
+  type DetailedSummary,
 } from "@shared/schema";
 import { TranscriptionService } from "./transcription";
 import { VisionService } from "./vision";
-import { exportNotebookToNotion, listNotionPages } from "./notion";
+import {
+  exportNotebookToNotion,
+  listNotionPages,
+  createNotionSubpage,
+  markdownToNotionBlocks,
+  NotionNotFoundError,
+} from "./notion";
 import { enqueueSync, getSyncStatus, getSyncQueueLength, backfillNotebook, isBackfilling } from "./notionSync";
 import { randomUUID } from "crypto";
+
+// In-memory tracker for in-flight detailed-summary generations per notebook.
+// Used by the UI to show a "generating" indicator and to prevent runaway
+// concurrent runs.
+const generatingDetailedSummary = new Set<string>();
+
+const DETAILED_SUMMARY_MODEL = "gpt-4o";
+
+function formatSubpageTitle(d: Date): string {
+  // e.g. "Detailed Summary — Apr 21 11:47 AM"
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return `Detailed Summary — ${month} ${day} ${time}`;
+}
+
+interface InSessionSummaryInput {
+  text: string;
+  timestamp: string | Date;
+}
+
+type GenerateDetailedSummaryResult =
+  | { ok: true; summary: DetailedSummary }
+  | { ok: false; reason: string; status: number };
+
+async function buildDetailedSummaryCorpus(
+  notebookId: string,
+  inSessionSummaries: InSessionSummaryInput[] = []
+): Promise<string> {
+  const [imagesList, transcriptionsList, checkpointsList] = await Promise.all([
+    storage.getImagesByNotebook(notebookId),
+    storage.getTranscriptionsByNotebook(notebookId),
+    storage.getCheckpointsByNotebook(notebookId),
+  ]);
+  type Entry = { ts: number; text: string };
+  const entries: Entry[] = [];
+  for (const img of imagesList) {
+    if (img.ocrText && img.ocrText.trim().length > 0) {
+      entries.push({
+        ts: new Date(img.uploadedAt).getTime(),
+        text: `[Photo OCR — ${img.fileName} @ ${new Date(img.uploadedAt).toLocaleString()}]\n${img.ocrText}`,
+      });
+    }
+  }
+  for (const t of transcriptionsList) {
+    entries.push({
+      ts: new Date(t.createdAt).getTime(),
+      text: `[Transcript @ ${new Date(t.createdAt).toLocaleString()}]\n${t.text}`,
+    });
+  }
+  for (const cp of checkpointsList) {
+    entries.push({
+      ts: new Date(cp.createdAt).getTime(),
+      text: `[Checkpoint @ ${new Date(cp.createdAt).toLocaleString()}] ${cp.label || "Checkpoint"}`,
+    });
+  }
+  for (const s of inSessionSummaries) {
+    const tsDate = new Date(s.timestamp);
+    entries.push({
+      ts: tsDate.getTime(),
+      text: `[In-session AI summary @ ${tsDate.toLocaleString()}]\n${s.text}`,
+    });
+  }
+  entries.sort((a, b) => a.ts - b.ts);
+  return entries.map((e) => e.text).join("\n\n---\n\n");
+}
+
+// Core generation routine. Public via the explicit POST endpoint and via the
+// auto-trigger that fires when a session is flipped to ended.
+//
+// Phase-2 isolation: failures here NEVER touch live-sync state, the live
+// queue, or `notion_block_mappings`. Only the detailed_summaries row and
+// its dedicated subpage block mapping are affected.
+async function generateDetailedSummary(
+  notebookId: string,
+  inSessionSummaries: InSessionSummaryInput[] = []
+): Promise<GenerateDetailedSummaryResult> {
+  if (generatingDetailedSummary.has(notebookId)) {
+    return { ok: false, reason: "A detailed summary is already being generated for this notebook.", status: 409 };
+  }
+  generatingDetailedSummary.add(notebookId);
+  try {
+    const notebook = await storage.getNotebook(notebookId);
+    if (!notebook) return { ok: false, reason: "Notebook not found", status: 404 };
+    if (!notebook.notionPageId) {
+      return {
+        ok: false,
+        reason: "Notebook has no synced Notion page yet. Use Send to Notion first.",
+        status: 400,
+      };
+    }
+
+    const corpus = await buildDetailedSummaryCorpus(notebookId, inSessionSummaries);
+    const priorSummaries = await storage.getDetailedSummariesByNotebook(notebookId);
+    const priorContext = priorSummaries
+      .slice(0, 3)
+      .map(
+        (s) =>
+          `[Prior detailed summary from ${new Date(s.createdAt).toLocaleString()}]\n${s.content}`
+      )
+      .join("\n\n---\n\n");
+
+    if (corpus.trim().length === 0) {
+      return {
+        ok: false,
+        reason: "Notebook has no captured content yet — nothing to summarize.",
+        status: 400,
+      };
+    }
+
+    const OpenAI = (await import("openai")).default;
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const prompt = `You are producing a thorough post-class detailed summary of an entire lecture/study session. Quality and completeness matter more than brevity.
+
+Produce well-structured markdown with the following sections (use ## headings):
+
+## Overview
+A 2-4 sentence high-level summary of what the session covered.
+
+## Detailed Notes by Topic
+Organized notes grouped by topic/subtopic. Use ### subheadings for distinct topics. Preserve formulas with $...$ / $$...$$, code with fenced blocks, and definitions in **bold**.
+
+## Key Concepts
+A bulleted list of the most important terms, definitions, and ideas to remember.
+
+## Open Questions
+Anything that seemed unresolved, ambiguous, or worth following up on.
+
+## Connections
+Brief notes on how the topics relate to each other or to prior material.
+
+${
+  priorContext
+    ? `Prior detailed summaries from earlier generations of this same notebook (use only for continuity, do not just repeat them):\n\n${priorContext}\n\n---\n\n`
+    : ""
+}Captured session material (chronological):\n\n${corpus}`;
+
+    const response = await openai.chat.completions.create({
+      model: DETAILED_SUMMARY_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 4096,
+    });
+    const content = response.choices[0]?.message?.content?.trim() ?? "";
+    const tokenCount = response.usage?.total_tokens ?? 0;
+
+    if (!content) {
+      return { ok: false, reason: "Model returned an empty summary", status: 502 };
+    }
+
+    // Persist the row first so the result is durable even if Notion push
+    // fails. notionSubpageId stays null until the subpage is created.
+    const row = await storage.createDetailedSummary({
+      id: randomUUID(),
+      notebookId,
+      content,
+      model: DETAILED_SUMMARY_MODEL,
+      tokenCount,
+    });
+
+    // Push to a dedicated Notion subpage. On 404 (parent page deleted in
+    // Notion), drop our reference so the next generation creates a fresh
+    // subpage. We do NOT touch live-sync state from here.
+    const subpageTitle = formatSubpageTitle(new Date(row.createdAt));
+    const blocks = markdownToNotionBlocks(content);
+    try {
+      const sub = await createNotionSubpage(notebook.notionPageId, subpageTitle, blocks);
+      const updated = (await storage.setDetailedSummarySubpage(row.id, sub.pageId, sub.url)) ?? row;
+      // Track the appended blocks in the Phase-2 mapping table — explicitly
+      // separate from notion_block_mappings to satisfy the isolation guard.
+      // (Currently informational; reserved for future Phase-2 features.)
+      // We don't have createdIds for the page itself; appendBlocksInChunks
+      // returns ids only when chunks > 100 — so we record an empty list when
+      // unknown rather than fabricating.
+      await storage.recordDetailedSummaryBlocks(row.id, []);
+      return { ok: true, summary: updated };
+    } catch (e) {
+      if (e instanceof NotionNotFoundError) {
+        // The synced parent page was deleted in Notion. Phase-2 isolation
+        // forbids us from mutating live-sync state from this failure path,
+        // so we ONLY clear the detailed-summary row's own subpage state.
+        // Live-sync will detect and recover the parent page on its next
+        // operation through its own 404 handling path.
+        console.warn(
+          `Detailed-summary subpage push hit 404 for notebook ${notebookId}; leaving live-sync state untouched. Next generation will create a fresh subpage once live-sync recreates the parent.`
+        );
+        const cleared = await storage.setDetailedSummarySubpage(row.id, null, null);
+        await storage.clearDetailedSummaryBlocks(row.id);
+        return { ok: true, summary: cleared ?? row };
+      }
+      console.error("Detailed-summary Notion push failed:", e);
+      // Row still saved without subpage — UI surfaces this as "no Notion link yet".
+      return { ok: true, summary: row };
+    }
+  } finally {
+    generatingDetailedSummary.delete(notebookId);
+  }
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const objectStorageService = new ObjectStorageService();
@@ -98,6 +303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notionSyncStatus: getSyncStatus(notebook.id),
         notionSyncPending: getSyncQueueLength(notebook.id),
         notionBackfilling: isBackfilling(notebook.id),
+        detailedSummaryGenerating: generatingDetailedSummary.has(notebook.id),
       });
     } catch (error) {
       console.error("Error fetching notebook:", error);
@@ -108,18 +314,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update notebook
   app.patch("/api/notebooks/:id", async (req, res) => {
     try {
-      const { title, className, notionSyncEnabled } = req.body;
-      if (!title && className === undefined && notionSyncEnabled === undefined) {
+      const { title, className, notionSyncEnabled, sessionEnded, autoDetailedSummaryOnEnd } = req.body;
+      if (
+        !title &&
+        className === undefined &&
+        notionSyncEnabled === undefined &&
+        sessionEnded === undefined &&
+        autoDetailedSummaryOnEnd === undefined
+      ) {
         return res.status(400).json({ error: "No fields to update" });
       }
       if (notionSyncEnabled !== undefined && typeof notionSyncEnabled !== "boolean") {
         return res.status(400).json({ error: "notionSyncEnabled must be a boolean" });
+      }
+      if (sessionEnded !== undefined && typeof sessionEnded !== "boolean") {
+        return res.status(400).json({ error: "sessionEnded must be a boolean" });
+      }
+      if (
+        autoDetailedSummaryOnEnd !== undefined &&
+        typeof autoDetailedSummaryOnEnd !== "boolean"
+      ) {
+        return res.status(400).json({ error: "autoDetailedSummaryOnEnd must be a boolean" });
       }
       const before = await storage.getNotebook(req.params.id);
       const updated = await storage.updateNotebook(req.params.id, {
         title,
         className,
         notionSyncEnabled,
+        sessionEnded,
+        autoDetailedSummaryOnEnd,
       });
       if (!updated) {
         return res.status(404).json({ error: "Notebook not found" });
@@ -130,6 +353,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         (before.title !== updated.title || before.className !== updated.className)
       ) {
         enqueueSync(updated.id, { kind: "rename" });
+      }
+      // Auto-trigger a detailed summary the moment a session is flipped to
+      // ended (and the per-notebook setting is on). Fire-and-forget; failures
+      // are reported via the row's own state, not the toggle response.
+      if (
+        before &&
+        !before.sessionEnded &&
+        updated.sessionEnded &&
+        updated.autoDetailedSummaryOnEnd
+      ) {
+        setImmediate(() => {
+          // Auto-trigger has no access to in-session summary cards (those
+          // live in client state). The synthesis still includes OCR,
+          // transcripts, checkpoints, and prior detailed summaries.
+          generateDetailedSummary(updated.id, []).catch((err) => {
+            console.error(
+              `Auto detailed-summary on session end failed for ${updated.id}:`,
+              err
+            );
+          });
+        });
       }
       res.json(updated);
     } catch (error) {
@@ -617,6 +861,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("Error backfilling to Notion:", error);
       res.status(500).json({ error: error?.message || "Failed to backfill to Notion" });
+    }
+  });
+
+  // ============ DETAILED SUMMARY ROUTES (Phase 2) ============
+
+  // Generate a new detailed summary for a notebook (versioned, never overwrites).
+  app.post("/api/notebooks/:id/detailed-summaries", async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as { inSessionSummaries?: unknown };
+      let inSession: InSessionSummaryInput[] = [];
+      if (Array.isArray(body.inSessionSummaries)) {
+        inSession = body.inSessionSummaries
+          .filter(
+            (s): s is { text: unknown; timestamp: unknown } =>
+              typeof s === "object" && s !== null
+          )
+          .map((s) => ({
+            text: typeof s.text === "string" ? s.text : "",
+            timestamp:
+              typeof s.timestamp === "string" || s.timestamp instanceof Date
+                ? (s.timestamp as string | Date)
+                : new Date(),
+          }))
+          .filter((s) => s.text.trim().length > 0);
+      }
+      const result = await generateDetailedSummary(req.params.id, inSession);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.reason });
+      }
+      res.json(result.summary);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to generate detailed summary";
+      console.error("Detailed summary generation failed:", error);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // List all detailed summaries for a notebook (newest first).
+  app.get("/api/notebooks/:id/detailed-summaries", async (req, res) => {
+    try {
+      const summaries = await storage.getDetailedSummariesByNotebook(req.params.id);
+      res.json(summaries);
+    } catch (error) {
+      console.error("Error listing detailed summaries:", error);
+      res.status(500).json({ error: "Failed to list detailed summaries" });
     }
   });
 

@@ -314,6 +314,60 @@ export async function updatePageTitle(
   }
 }
 
+// =============================================================================
+// PHASE 2: Subpage helpers
+// -----------------------------------------------------------------------------
+// Used by features like detailed summaries that create dedicated child pages
+// under the synced notebook page. The live-sync engine MUST NOT call these
+// helpers — these subpages are isolated from the live queue. See the guard
+// in `server/notionSync.ts`.
+// =============================================================================
+export interface NotionSubpageResult {
+  pageId: string;
+  url: string;
+}
+
+export async function createNotionSubpage(
+  parentPageId: string,
+  title: string,
+  blocks: NotionBlock[]
+): Promise<NotionSubpageResult> {
+  const firstBlocks = blocks.slice(0, 100);
+  const remaining = blocks.slice(100);
+
+  const body = {
+    parent: { type: "page_id", page_id: parentPageId },
+    properties: {
+      title: [{ type: "text", text: { content: title } }],
+    },
+    children: firstBlocks,
+  };
+
+  const res = await connectors.proxy("notion", "/v1/pages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new NotionNotFoundError(
+        `Parent Notion page not found: ${parentPageId}`
+      );
+    }
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Failed to create Notion subpage: ${JSON.stringify(err)}`);
+  }
+
+  const page = (await res.json()) as { id: string; url: string };
+
+  if (remaining.length > 0) {
+    await appendBlocksInChunks(page.id, remaining);
+  }
+
+  return { pageId: page.id, url: page.url };
+}
+
 export interface NotionPage {
   id: string;
   title: string;

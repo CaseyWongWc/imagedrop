@@ -18,6 +18,28 @@ import type {
 
 const connectors = new ReplitConnectors();
 
+// =============================================================================
+// PHASE-2 ISOLATION GUARD (architectural rule)
+// -----------------------------------------------------------------------------
+// The live-sync engine in this file owns the `notion_block_mappings` table and
+// is the ONLY code path that may delete/update Notion blocks tracked there.
+//
+// Phase-2 features (detailed summaries, study guides, attachments, …) write
+// their content to dedicated Notion *subpages* under the synced notebook
+// page, and track those block IDs in their OWN tables (e.g.
+// `detailed_summary_block_mappings`). The live-sync engine MUST NEVER:
+//   • Read from a Phase-2 mapping table
+//   • Delete or update any block ID stored in a Phase-2 mapping table
+//   • Touch the Notion subpage itself (subpages are opaque to live sync)
+//
+// A failed Phase-2 generation must never roll back live-sync state, the live
+// queue, or any live mappings — Phase-2 has its own recovery (drop the
+// subpage reference, recreate on next generation).
+//
+// MappingKind below is the closed set of "kinds" recognised by the live
+// queue. Adding a new value here is the wrong way to support a Phase-2
+// feature — give it its own table instead.
+// =============================================================================
 export type MappingKind =
   | "image"
   | "transcription"

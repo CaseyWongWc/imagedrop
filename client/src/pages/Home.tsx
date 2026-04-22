@@ -42,6 +42,9 @@ import {
   CloudUpload,
   Cloud,
   History,
+  PlayCircle,
+  StopCircle,
+  FileSearch,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
@@ -99,6 +102,8 @@ export default function Home() {
   const [isUploading, setIsUploading] = useState(false);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [summariesPanelOpen, setSummariesPanelOpen] = useState(false);
+  const [openedSummaryId, setOpenedSummaryId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isSendingToNotion, setIsSendingToNotion] = useState(false);
   const [notionParentPageId, setNotionParentPageId] = useState<string>(() => {
@@ -247,6 +252,19 @@ export default function Home() {
     notionSyncStatus: "idle" | "syncing";
     notionSyncPending: number;
     notionBackfilling: boolean;
+    sessionEnded: boolean;
+    autoDetailedSummaryOnEnd: boolean;
+    detailedSummaryGenerating: boolean;
+  };
+  type DetailedSummary = {
+    id: string;
+    notebookId: string;
+    content: string;
+    model: string;
+    tokenCount: number;
+    notionSubpageId: string | null;
+    notionSubpageUrl: string | null;
+    createdAt: string | Date;
   };
   const { data: notebookDetail } = useQuery<NotebookDetail>({
     queryKey: ["/api/notebooks", selectedNotebookId],
@@ -398,6 +416,62 @@ export default function Home() {
         description: vars.enabled
           ? "New captures will be mirrored to Notion."
           : "New captures will stay local. Use Send to Notion to push manually.",
+      });
+    },
+  });
+
+  const toggleSessionEndedMutation = useMutation({
+    mutationFn: async ({ id, ended }: { id: string; ended: boolean }) => {
+      return await apiRequest("PATCH", `/api/notebooks/${id}`, { sessionEnded: ended });
+    },
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", vars.id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", vars.id, "detailed-summaries"] });
+      toast({
+        title: vars.ended ? "Session ended" : "Session re-opened",
+        description: vars.ended
+          ? "Class is marked as ended. New captures still work."
+          : "Notebook is back in active session.",
+      });
+    },
+  });
+
+  const toggleAutoDetailedSummaryMutation = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      return await apiRequest("PATCH", `/api/notebooks/${id}`, { autoDetailedSummaryOnEnd: enabled });
+    },
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", vars.id] });
+    },
+  });
+
+  const generateDetailedSummaryMutation = useMutation<DetailedSummary, Error, string>({
+    mutationFn: async (id: string) => {
+      const inSessionSummaries = summaryCards.map((c) => ({
+        text: c.text,
+        timestamp:
+          c.timestamp instanceof Date ? c.timestamp.toISOString() : String(c.timestamp),
+      }));
+      const res = await apiRequest("POST", `/api/notebooks/${id}/detailed-summaries`, {
+        inSessionSummaries,
+      });
+      return (await res.json()) as DetailedSummary;
+    },
+    onSuccess: (data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", id, "detailed-summaries"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", id] });
+      toast({
+        title: "Detailed summary ready",
+        description: data.notionSubpageUrl
+          ? "Saved to a new Notion subpage."
+          : "Saved locally. Notion push pending.",
+      });
+    },
+    onError: (err) => {
+      toast({
+        title: "Could not generate detailed summary",
+        description: err.message || "Try again in a moment.",
+        variant: "destructive",
       });
     },
   });
@@ -987,6 +1061,73 @@ export default function Home() {
               }
               return null;
             })()}
+            {selectedNotebookId && notebookDetail && (
+              <Button
+                variant={notebookDetail.sessionEnded ? "outline" : "ghost"}
+                size="icon"
+                onClick={() =>
+                  toggleSessionEndedMutation.mutate({
+                    id: selectedNotebookId,
+                    ended: !notebookDetail.sessionEnded,
+                  })
+                }
+                disabled={toggleSessionEndedMutation.isPending}
+                aria-label={notebookDetail.sessionEnded ? "Re-open session" : "End session"}
+                title={
+                  notebookDetail.sessionEnded
+                    ? "Session ended — click to re-open"
+                    : "Session active — click to end class"
+                }
+                data-testid="button-toggle-session"
+              >
+                {notebookDetail.sessionEnded ? (
+                  <StopCircle className="w-4 h-4 text-muted-foreground" />
+                ) : (
+                  <PlayCircle className="w-4 h-4 text-emerald-500" />
+                )}
+              </Button>
+            )}
+            {selectedNotebookId && notebookDetail && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => generateDetailedSummaryMutation.mutate(selectedNotebookId)}
+                disabled={
+                  generateDetailedSummaryMutation.isPending ||
+                  notebookDetail.detailedSummaryGenerating ||
+                  !notebookDetail.notionPageId ||
+                  timeline.length === 0
+                }
+                aria-label="Generate detailed summary"
+                title={
+                  !notebookDetail.notionPageId
+                    ? "Send the notebook to Notion first"
+                    : timeline.length === 0
+                    ? "Capture something first"
+                    : "Generate a thorough post-class summary into a new Notion subpage"
+                }
+                data-testid="button-generate-detailed-summary"
+              >
+                {generateDetailedSummaryMutation.isPending ||
+                notebookDetail.detailedSummaryGenerating ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4" />
+                )}
+              </Button>
+            )}
+            {selectedNotebookId && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setSummariesPanelOpen(true)}
+                aria-label="View detailed summaries"
+                title="View detailed summaries"
+                data-testid="button-open-summaries-panel"
+              >
+                <FileSearch className="w-4 h-4" />
+              </Button>
+            )}
             {selectedNotebookId && notebookDetail && (
               <Button
                 variant="ghost"
@@ -1723,6 +1864,198 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
+      <DetailedSummariesDialog
+        open={summariesPanelOpen}
+        onOpenChange={setSummariesPanelOpen}
+        notebookId={selectedNotebookId}
+        notebookDetail={notebookDetail}
+        onGenerate={() =>
+          selectedNotebookId && generateDetailedSummaryMutation.mutate(selectedNotebookId)
+        }
+        isGenerating={
+          generateDetailedSummaryMutation.isPending ||
+          !!notebookDetail?.detailedSummaryGenerating
+        }
+        autoOnEnd={!!notebookDetail?.autoDetailedSummaryOnEnd}
+        onToggleAuto={(enabled) =>
+          selectedNotebookId &&
+          toggleAutoDetailedSummaryMutation.mutate({ id: selectedNotebookId, enabled })
+        }
+        openedSummaryId={openedSummaryId}
+        setOpenedSummaryId={setOpenedSummaryId}
+      />
+
     </div>
+  );
+}
+
+interface DetailedSummariesDialogProps {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  notebookId: string | null;
+  notebookDetail: { notionPageId: string | null } | undefined;
+  onGenerate: () => void;
+  isGenerating: boolean;
+  autoOnEnd: boolean;
+  onToggleAuto: (enabled: boolean) => void;
+  openedSummaryId: string | null;
+  setOpenedSummaryId: (id: string | null) => void;
+}
+
+interface DetailedSummaryRow {
+  id: string;
+  notebookId: string;
+  content: string;
+  model: string;
+  tokenCount: number;
+  notionSubpageId: string | null;
+  notionSubpageUrl: string | null;
+  createdAt: string | Date;
+}
+
+function DetailedSummariesDialog(props: DetailedSummariesDialogProps) {
+  const {
+    open, onOpenChange, notebookId, notebookDetail,
+    onGenerate, isGenerating, autoOnEnd, onToggleAuto,
+    openedSummaryId, setOpenedSummaryId,
+  } = props;
+
+  const { data: summaries = [], isLoading } = useQuery<DetailedSummaryRow[]>({
+    queryKey: ["/api/notebooks", notebookId, "detailed-summaries"],
+    enabled: open && !!notebookId,
+    refetchInterval: open ? 4000 : false,
+  });
+
+  const opened: DetailedSummaryRow | null =
+    summaries.find((s) => s.id === openedSummaryId) ?? null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Detailed summaries</DialogTitle>
+          <DialogDescription>
+            Thorough post-class summaries. Each generation creates a new
+            Notion subpage — older versions are never overwritten.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          <Button
+            onClick={onGenerate}
+            disabled={
+              isGenerating ||
+              !notebookId ||
+              !notebookDetail?.notionPageId
+            }
+            data-testid="button-generate-detailed-summary-panel"
+          >
+            {isGenerating ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Sparkles className="w-4 h-4 mr-2" />
+            )}
+            Generate now
+          </Button>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground ml-auto">
+            <input
+              type="checkbox"
+              checked={autoOnEnd}
+              onChange={(e) => onToggleAuto(e.target.checked)}
+              data-testid="checkbox-auto-detailed-summary"
+            />
+            Auto-generate when session ends
+          </label>
+        </div>
+
+        {!notebookDetail?.notionPageId && (
+          <p className="text-xs text-muted-foreground pt-2">
+            Send the notebook to Notion first — detailed summaries live as
+            subpages under the synced page.
+          </p>
+        )}
+
+        <div className="flex-1 overflow-y-auto mt-3 space-y-2">
+          {opened ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setOpenedSummaryId(null)}
+                  data-testid="button-back-to-summaries-list"
+                >
+                  ← Back
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(opened.createdAt).toLocaleString()} · {opened.model}
+                </span>
+                {opened.notionSubpageUrl && (
+                  <a
+                    href={opened.notionSubpageUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto text-xs flex items-center gap-1 text-muted-foreground hover-elevate px-2 py-1 rounded-md"
+                    data-testid={`link-notion-subpage-${opened.id}`}
+                  >
+                    <ExternalLink className="w-3 h-3" /> Open in Notion
+                  </a>
+                )}
+              </div>
+              <div className="prose prose-sm dark:prose-invert max-w-none border rounded-md p-4">
+                <MarkdownRenderer content={opened.content} />
+              </div>
+            </div>
+          ) : isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : summaries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No detailed summaries yet. Generate one above.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {summaries.map((s) => (
+                <li
+                  key={s.id}
+                  className="border rounded-md p-3 hover-elevate cursor-pointer"
+                  onClick={() => setOpenedSummaryId(s.id)}
+                  data-testid={`row-detailed-summary-${s.id}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">
+                      {new Date(s.createdAt).toLocaleString()}
+                    </span>
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      {s.model} · {s.tokenCount} tok
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                    {s.content.slice(0, 220)}
+                    {s.content.length > 220 ? "…" : ""}
+                  </p>
+                  {s.notionSubpageUrl ? (
+                    <a
+                      href={s.notionSubpageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground mt-2 hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                      data-testid={`link-notion-subpage-row-${s.id}`}
+                    >
+                      <ExternalLink className="w-3 h-3" /> Notion subpage
+                    </a>
+                  ) : (
+                    <span className="text-xs text-amber-600 mt-2 inline-block">
+                      Local only — Notion push pending
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

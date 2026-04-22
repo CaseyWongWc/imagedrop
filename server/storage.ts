@@ -7,6 +7,8 @@ import {
   transcriptions,
   checkpoints,
   notionBlockMappings,
+  detailedSummaries,
+  detailedSummaryBlockMappings,
   type Notebook,
   type InsertNotebook,
   type Image,
@@ -15,6 +17,8 @@ import {
   type InsertTranscription,
   type Checkpoint,
   type InsertCheckpoint,
+  type DetailedSummary,
+  type InsertDetailedSummary,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -22,7 +26,7 @@ export interface IStorage {
   createNotebook(notebook: InsertNotebook): Promise<Notebook>;
   getNotebook(id: string): Promise<Notebook | undefined>;
   getAllNotebooks(): Promise<Notebook[]>;
-  updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean }): Promise<Notebook | undefined>;
+  updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean }): Promise<Notebook | undefined>;
   setNotebookNotionPage(id: string, notionPageId: string | null): Promise<Notebook | undefined>;
   setNotebookSyncError(id: string, error: string | null): Promise<Notebook | undefined>;
   deleteNotebook(id: string): Promise<void>;
@@ -58,6 +62,14 @@ export interface IStorage {
   deleteNotionBlockMapping(notebookId: string, localId: string, kind: string): Promise<void>;
   clearAllNotionBlockMappings(notebookId: string): Promise<void>;
   getSyncedLocalIds(notebookId: string, kind: string): Promise<Set<string>>;
+
+  // Detailed summary (Phase-2) operations
+  createDetailedSummary(summary: InsertDetailedSummary): Promise<DetailedSummary>;
+  getDetailedSummary(id: string): Promise<DetailedSummary | undefined>;
+  getDetailedSummariesByNotebook(notebookId: string): Promise<DetailedSummary[]>;
+  setDetailedSummarySubpage(id: string, subpageId: string | null, subpageUrl: string | null): Promise<DetailedSummary | undefined>;
+  recordDetailedSummaryBlocks(detailedSummaryId: string, blockIds: string[]): Promise<void>;
+  clearDetailedSummaryBlocks(detailedSummaryId: string): Promise<void>;
 }
 
 export class DbStorage implements IStorage {
@@ -76,11 +88,13 @@ export class DbStorage implements IStorage {
     return db.select().from(notebooks).orderBy(desc(notebooks.createdAt));
   }
 
-  async updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean }): Promise<Notebook | undefined> {
+  async updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean }): Promise<Notebook | undefined> {
     const updateData: Record<string, any> = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.className !== undefined) updateData.className = data.className;
     if (data.notionSyncEnabled !== undefined) updateData.notionSyncEnabled = data.notionSyncEnabled;
+    if (data.sessionEnded !== undefined) updateData.sessionEnded = data.sessionEnded;
+    if (data.autoDetailedSummaryOnEnd !== undefined) updateData.autoDetailedSummaryOnEnd = data.autoDetailedSummaryOnEnd;
     if (Object.keys(updateData).length === 0) {
       return this.getNotebook(id);
     }
@@ -300,6 +314,56 @@ export class DbStorage implements IStorage {
     await db
       .delete(notionBlockMappings)
       .where(eq(notionBlockMappings.notebookId, notebookId));
+  }
+
+  // ============ Detailed summary (Phase-2) operations ============
+  async createDetailedSummary(insertSummary: InsertDetailedSummary): Promise<DetailedSummary> {
+    const [row] = await db.insert(detailedSummaries).values(insertSummary).returning();
+    return row;
+  }
+
+  async getDetailedSummary(id: string): Promise<DetailedSummary | undefined> {
+    const [row] = await db.select().from(detailedSummaries).where(eq(detailedSummaries.id, id));
+    return row;
+  }
+
+  async getDetailedSummariesByNotebook(notebookId: string): Promise<DetailedSummary[]> {
+    return db
+      .select()
+      .from(detailedSummaries)
+      .where(eq(detailedSummaries.notebookId, notebookId))
+      .orderBy(desc(detailedSummaries.createdAt));
+  }
+
+  async setDetailedSummarySubpage(
+    id: string,
+    subpageId: string | null,
+    subpageUrl: string | null
+  ): Promise<DetailedSummary | undefined> {
+    const [updated] = await db
+      .update(detailedSummaries)
+      .set({ notionSubpageId: subpageId, notionSubpageUrl: subpageUrl })
+      .where(eq(detailedSummaries.id, id))
+      .returning();
+    return updated;
+  }
+
+  async recordDetailedSummaryBlocks(detailedSummaryId: string, blockIds: string[]): Promise<void> {
+    if (blockIds.length === 0) return;
+    await db
+      .delete(detailedSummaryBlockMappings)
+      .where(eq(detailedSummaryBlockMappings.detailedSummaryId, detailedSummaryId));
+    await db.insert(detailedSummaryBlockMappings).values({
+      id: randomUUID(),
+      detailedSummaryId,
+      blockIds,
+    });
+  }
+
+  async clearDetailedSummaryBlocks(detailedSummaryId: string): Promise<void> {
+    await db
+      .delete(detailedSummaryBlockMappings)
+      .where(eq(detailedSummaryBlockMappings.detailedSummaryId, detailedSummaryId));
   }
 }
 

@@ -12,12 +12,20 @@ export const notebooks = pgTable("notebooks", {
   notionPageId: text("notion_page_id"),
   notionSyncError: text("notion_sync_error"),
   notionSyncEnabled: boolean("notion_sync_enabled").notNull().default(true),
+  // Phase 2: session lifecycle. When a session is "ended" the in-session
+  // auto-summary timer stops firing for this notebook.
+  sessionEnded: boolean("session_ended").notNull().default(false),
+  // Phase 2: when true, marking a notebook ended auto-triggers a single
+  // detailed-summary generation.
+  autoDetailedSummaryOnEnd: boolean("auto_detailed_summary_on_end").notNull().default(false),
 });
 
 export const insertNotebookSchema = createInsertSchema(notebooks).omit({
   createdAt: true,
   notionPageId: true,
   notionSyncError: true,
+  sessionEnded: true,
+  autoDetailedSummaryOnEnd: true,
 });
 
 export type InsertNotebook = z.infer<typeof insertNotebookSchema>;
@@ -121,6 +129,57 @@ export const notionBlockMappingsRelations = relations(notionBlockMappings, ({ on
     references: [notebooks.id],
   }),
 }));
+
+// ============================================================================
+// PHASE 2: Detailed Summaries
+// ----------------------------------------------------------------------------
+// Detailed (post-class) summaries are versioned, never overwritten. Each
+// generation creates a new row and a brand-new Notion subpage under the
+// synced notebook page. Block IDs are tracked in a SEPARATE mapping table
+// (`detailedSummaryBlockMappings`) so the live-sync engine in
+// `server/notionSync.ts` can never accidentally touch them.
+// ============================================================================
+export const detailedSummaries = pgTable("detailed_summaries", {
+  id: varchar("id").primaryKey(),
+  notebookId: varchar("notebook_id")
+    .references(() => notebooks.id, { onDelete: "cascade" })
+    .notNull(),
+  content: text("content").notNull(),
+  model: text("model").notNull(),
+  tokenCount: integer("token_count").notNull().default(0),
+  notionSubpageId: text("notion_subpage_id"),
+  notionSubpageUrl: text("notion_subpage_url"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertDetailedSummarySchema = createInsertSchema(detailedSummaries).omit({
+  createdAt: true,
+  notionSubpageId: true,
+  notionSubpageUrl: true,
+});
+
+export type InsertDetailedSummary = z.infer<typeof insertDetailedSummarySchema>;
+export type DetailedSummary = typeof detailedSummaries.$inferSelect;
+
+export const detailedSummariesRelations = relations(detailedSummaries, ({ one }) => ({
+  notebook: one(notebooks, {
+    fields: [detailedSummaries.notebookId],
+    references: [notebooks.id],
+  }),
+}));
+
+// Phase-2 block mapping. Lives in its own table — explicitly NOT
+// `notion_block_mappings` — so the live-sync delete/update paths can never
+// reach these blocks. See the architectural guard in `server/notionSync.ts`.
+export const detailedSummaryBlockMappings = pgTable("detailed_summary_block_mappings", {
+  id: varchar("id").primaryKey(),
+  detailedSummaryId: varchar("detailed_summary_id")
+    .references(() => detailedSummaries.id, { onDelete: "cascade" })
+    .notNull(),
+  blockIds: text("block_ids").array().notNull(),
+});
+
+export type DetailedSummaryBlockMapping = typeof detailedSummaryBlockMappings.$inferSelect;
 
 // Timeline item type for unified view
 export type TimelineItem = {
