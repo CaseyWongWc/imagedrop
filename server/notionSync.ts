@@ -4,6 +4,7 @@ import {
   buildBlocks,
   deleteNotionBlock,
   markdownToNotionBlocks,
+  NotionNotFoundError,
   updateHeading3Block,
   updatePageTitle,
 } from "./notion";
@@ -40,6 +41,10 @@ type Job = { notebookId: string; item: SyncItem };
 const queues = new Map<string, Job[]>();
 const running = new Set<string>();
 const backfilling = new Set<string>();
+// Tracks the last known public baseUrl per notebook so that automatic
+// recovery (after the user deletes the synced Notion page) can repopulate
+// the freshly recreated page with image URLs that resolve from outside.
+const lastBaseUrls = new Map<string, string>();
 
 function itemToTimelineItem(item: SyncItem): { timeline: TimelineItem; baseUrl: string } | null {
   if (item.kind === "image") {
@@ -167,11 +172,52 @@ function mappingKeyForItem(item: SyncItem): { kind: MappingKind; localId: string
   }
 }
 
-async function processOne(notebookId: string, item: SyncItem): Promise<void> {
-  // Handle rename: just update the Notion page title using current notebook state.
+async function processOne(
+  notebookId: string,
+  item: SyncItem,
+  recovered = false
+): Promise<void> {
+  try {
+    await processOneInner(notebookId, item);
+  } catch (e) {
+    if (!recovered && e instanceof NotionNotFoundError) {
+      // The tracked Notion page (or one of its tracked blocks) was deleted
+      // by the user. Drop our dead references, retry the current operation
+      // (which will recreate the Notion page via ensurePage), and then
+      // schedule a full backfill so all historical content lands on the
+      // freshly created page — not just the single item that triggered
+      // recovery.
+      console.warn(
+        `Notion 404 for notebook ${notebookId}; clearing page reference and recovering: ${e.message}`
+      );
+      await storage.setNotebookNotionPage(notebookId, null);
+      await storage.clearAllNotionBlockMappings(notebookId);
+      await processOne(notebookId, item, true);
+      // Fire-and-forget; backfillNotebook is idempotent and skips items
+      // already in the queue or already mapped (the just-retried item).
+      const baseUrl = lastBaseUrls.get(notebookId) ?? "";
+      setImmediate(() => {
+        backfillNotebook(notebookId, baseUrl).catch((err) => {
+          console.error(`Post-recovery backfill failed for ${notebookId}:`, err);
+        });
+      });
+      return;
+    }
+    throw e;
+  }
+}
+
+async function processOneInner(notebookId: string, item: SyncItem): Promise<void> {
+  // Handle rename: update the Notion page title using current notebook state.
+  // If the page reference is missing (e.g. just cleared by recovery from a
+  // user-deleted page), recreate the page so the rename re-establishes sync.
   if (item.kind === "rename") {
     const notebook = await storage.getNotebook(notebookId);
-    if (!notebook || !notebook.notionPageId) return;
+    if (!notebook) return;
+    if (!notebook.notionPageId) {
+      await ensurePage(notebookId);
+      return;
+    }
     const title = buildPageTitle(notebook.title, notebook.className, notebook.createdAt);
     await updatePageTitle(notebook.notionPageId, title);
     return;
@@ -191,9 +237,28 @@ async function processOne(notebookId: string, item: SyncItem): Promise<void> {
       item.content.id,
       item.targetKind
     );
-    // No prior sync — nothing to mirror; the create path will handle it
-    // when the item is first synced.
-    if (previous.length === 0) return;
+    // No prior mapping — either the item was never synced, or recovery
+    // from a user-deleted page just cleared it. Either way, treat the
+    // edit as a first-time create so the new content lands on the page.
+    if (previous.length === 0) {
+      const pageId = await ensurePage(notebookId);
+      const synthetic: SyncItem =
+        item.targetKind === "checkpoint"
+          ? { kind: "checkpoint", content: item.content as Checkpoint }
+          : { kind: "transcription", content: item.content as Transcription };
+      const blocks = blocksForItem(synthetic);
+      if (blocks.length === 0) return;
+      const createdIds = await appendBlocksInChunks(pageId, blocks);
+      if (createdIds.length > 0) {
+        await storage.recordNotionBlocks(
+          notebookId,
+          item.content.id,
+          item.targetKind,
+          createdIds
+        );
+      }
+      return;
+    }
 
     if (item.targetKind === "checkpoint") {
       // buildBlocks for a checkpoint produces [divider, heading_3]. We only
@@ -226,10 +291,12 @@ async function processOne(notebookId: string, item: SyncItem): Promise<void> {
     );
     // Best-effort cleanup of the previously appended blocks. Failures here
     // only leave orphans on the Notion page; the mapping is already correct.
+    // Don't swallow NotionNotFoundError — let recovery clear our dead refs.
     for (const blockId of previous) {
       try {
         await deleteNotionBlock(blockId);
       } catch (e) {
+        if (e instanceof NotionNotFoundError) throw e;
         console.error(`Failed to delete previous transcription block ${blockId}:`, e);
       }
     }
@@ -255,6 +322,7 @@ async function processOne(notebookId: string, item: SyncItem): Promise<void> {
       try {
         await deleteNotionBlock(blockId);
       } catch (e) {
+        if (e instanceof NotionNotFoundError) throw e;
         console.error(`Failed to delete previous OCR block ${blockId}:`, e);
       }
     }
@@ -350,6 +418,12 @@ export function enqueueSync(
       ) {
         return;
       }
+      // Remember the baseUrl whenever an image item flows through, so
+      // automatic recovery can later reconstruct image URLs without a
+      // request context.
+      if (item.kind === "image" && item.baseUrl) {
+        lastBaseUrls.set(notebookId, item.baseUrl);
+      }
       let queue = queues.get(notebookId);
       if (!queue) {
         queue = [];
@@ -407,6 +481,7 @@ export async function backfillNotebook(
   }
   backfilling.add(notebookId);
   try {
+    if (baseUrl) lastBaseUrls.set(notebookId, baseUrl);
     const notebook = await storage.getNotebook(notebookId);
     if (!notebook) return { ok: false, reason: "not-found" };
     if (!notebook.notionPageId) return { ok: false, reason: "no-page" };

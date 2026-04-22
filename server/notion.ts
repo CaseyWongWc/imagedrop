@@ -4,6 +4,13 @@ import type { TimelineItem, Image, Checkpoint } from "@shared/schema";
 
 const connectors = new ReplitConnectors();
 
+export class NotionNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotionNotFoundError";
+  }
+}
+
 type NotionBlock = Record<string, unknown>;
 
 type RichText = {
@@ -227,6 +234,11 @@ export async function appendBlocksInChunks(
       }
     );
     if (!res.ok) {
+      if (res.status === 404) {
+        throw new NotionNotFoundError(
+          `Notion page or parent block not found: ${pageId}`
+        );
+      }
       const err = await res.json();
       throw new Error(`Failed to append blocks: ${JSON.stringify(err)}`);
     }
@@ -243,8 +255,12 @@ export async function deleteNotionBlock(blockId: string): Promise<void> {
     method: "DELETE",
   });
   if (!res.ok) {
-    // 404 means the block was already removed in Notion — treat as success.
-    if (res.status === 404) return;
+    if (res.status === 404) {
+      // The block (or its parent page) was deleted in Notion. Surface this
+      // distinctly so the sync layer can clear its dead references and
+      // recover, rather than silently ignoring it.
+      throw new NotionNotFoundError(`Notion block not found: ${blockId}`);
+    }
     const err = await res.json().catch(() => ({}));
     throw new Error(`Failed to delete block ${blockId}: ${JSON.stringify(err)}`);
   }
@@ -264,6 +280,11 @@ export async function updateHeading3Block(
     }),
   });
   if (!res.ok) {
+    if (res.status === 404) {
+      throw new NotionNotFoundError(
+        `Notion heading block not found: ${blockId}`
+      );
+    }
     const err = await res.json().catch(() => ({}));
     throw new Error(`Failed to update heading block ${blockId}: ${JSON.stringify(err)}`);
   }
@@ -283,6 +304,11 @@ export async function updatePageTitle(
     }),
   });
   if (!res.ok) {
+    if (res.status === 404) {
+      throw new NotionNotFoundError(
+        `Notion page not found: ${pageId}`
+      );
+    }
     const err = await res.json().catch(() => ({}));
     throw new Error(`Failed to update page title: ${JSON.stringify(err)}`);
   }
