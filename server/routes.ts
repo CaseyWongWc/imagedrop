@@ -52,6 +52,40 @@ const generatingStudyGuide = new Set<string>();
 const DETAILED_SUMMARY_MODEL = "gpt-4o";
 const STUDY_GUIDE_MODEL = "gpt-4o";
 
+// ── Token-budget constants ────────────────────────────────────────────────────
+// GPT-4o starter tier: 30 000 TPM.  We reserve 4 096 for the output and ~1 000
+// for the static prompt preamble, leaving ~24 900 tokens for all dynamic input.
+// At ~4 chars/token that is ~99 600 chars — we target 60 000 chars for the main
+// corpus (generous but well under the limit) and 5 000 for prior-context blurbs.
+const MAX_CORPUS_CHARS = 60_000;
+const MAX_PRIOR_CONTEXT_CHARS = 5_000;
+
+/**
+ * Trim a pre-sorted (chronological) array of {ts, text} entries so the joined
+ * result stays within maxChars.  Drops the OLDEST entries first so the most
+ * recent lecture material is always preserved.  Returns the joined string and a
+ * flag indicating whether any trimming occurred.
+ */
+function trimEntriesToBudget(
+  entries: { ts: number; text: string }[],
+  separator: string,
+  maxChars: number
+): { text: string; wasTrimmed: boolean } {
+  const sepLen = separator.length;
+  let totalLen = 0;
+  const kept: string[] = [];
+  // Walk from newest → oldest so we always keep the most recent content.
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entryLen = entries[i].text.length + (kept.length > 0 ? sepLen : 0);
+    if (totalLen + entryLen > maxChars) continue; // skip — too large
+    kept.unshift(entries[i].text);
+    totalLen += entryLen;
+  }
+  const wasTrimmed = kept.length < entries.length;
+  const body = kept.join(separator);
+  return { text: body, wasTrimmed };
+}
+
 function formatSubpageTitle(d: Date): string {
   // e.g. "Detailed Summary — Apr 21 11:47 AM"
   const month = d.toLocaleString("en-US", { month: "short" });
@@ -108,7 +142,15 @@ async function buildDetailedSummaryCorpus(
     });
   }
   entries.sort((a, b) => a.ts - b.ts);
-  return entries.map((e) => e.text).join("\n\n---\n\n");
+  const SEP = "\n\n---\n\n";
+  const { text, wasTrimmed } = trimEntriesToBudget(entries, SEP, MAX_CORPUS_CHARS);
+  if (wasTrimmed) {
+    return (
+      `> **Note:** Some earlier session content was omitted to stay within model input limits. The most recent captures are preserved.\n\n` +
+      text
+    );
+  }
+  return text;
 }
 
 // Core generation routine. Public via the explicit POST endpoint and via the
@@ -138,13 +180,14 @@ async function generateDetailedSummary(
 
     const corpus = await buildDetailedSummaryCorpus(notebookId, inSessionSummaries);
     const priorSummaries = await storage.getDetailedSummariesByNotebook(notebookId);
-    const priorContext = priorSummaries
+    const rawPriorContext = priorSummaries
       .slice(0, 3)
       .map(
         (s) =>
           `[Prior detailed summary from ${new Date(s.createdAt).toLocaleString()}]\n${s.content}`
       )
       .join("\n\n---\n\n");
+    const priorContext = rawPriorContext.slice(0, MAX_PRIOR_CONTEXT_CHARS);
 
     if (corpus.trim().length === 0) {
       return {
@@ -479,13 +522,14 @@ async function generateStudyGuide(
     }
 
     const prior = await storage.getStudyGuidesByNotebook(notebookId);
-    const priorContext = prior
+    const rawPriorContext = prior
       .slice(0, 2)
       .map((g) => {
         const secs = parseSections(g.sections);
         return `[Prior study guide from ${new Date(g.createdAt).toLocaleString()}]\nTopics: ${secs.topics}\nKey Concepts: ${secs.keyConcepts}`;
       })
       .join("\n\n---\n\n");
+    const priorContext = rawPriorContext.slice(0, MAX_PRIOR_CONTEXT_CHARS);
 
     const { sections, tokenCount } = await callStudyGuideModel(corpus, priorContext);
 
