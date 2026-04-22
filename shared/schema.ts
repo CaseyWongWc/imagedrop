@@ -21,6 +21,10 @@ export const notebooks = pgTable("notebooks", {
   // Phase 2: when true, marking a notebook ended auto-triggers a single
   // study-guide generation as well.
   autoStudyGuideOnEnd: boolean("auto_study_guide_on_end").notNull().default(false),
+  // Phase 2: when true, attachments are mirrored to a dedicated Notion subpage.
+  mirrorAttachmentsToNotion: boolean("mirror_attachments_to_notion").notNull().default(true),
+  // Phase 2: Notion subpage ID for the "Attachments" subpage under this notebook's Notion page.
+  attachmentsSubpageId: text("attachments_subpage_id"),
 });
 
 export const insertNotebookSchema = createInsertSchema(notebooks).omit({
@@ -30,6 +34,7 @@ export const insertNotebookSchema = createInsertSchema(notebooks).omit({
   sessionEnded: true,
   autoDetailedSummaryOnEnd: true,
   autoStudyGuideOnEnd: true,
+  attachmentsSubpageId: true,
 });
 
 export type InsertNotebook = z.infer<typeof insertNotebookSchema>;
@@ -89,6 +94,7 @@ export const notebooksRelations = relations(notebooks, ({ many }) => ({
   images: many(images),
   transcriptions: many(transcriptions),
   checkpoints: many(checkpoints),
+  attachments: many(attachments),
 }));
 
 export const imagesRelations = relations(images, ({ one }) => ({
@@ -268,3 +274,62 @@ export type TimelineItem = {
   timestamp: Date;
   content: Image | Transcription | Checkpoint;
 };
+
+// ============================================================================
+// PHASE 2: Attachments
+// ----------------------------------------------------------------------------
+// Supplementary files (PDFs, slides, audio, etc.) attached to a notebook.
+// Live in object storage; optionally mirrored to a dedicated Notion subpage.
+// Each attachment may be optionally linked to one timeline item (image,
+// transcription, checkpoint) or phase-2 item (summary, study-guide-section).
+// Block IDs for the Notion subpage are tracked in `attachment_block_mappings`
+// (NOT `notion_block_mappings`) — strict phase-2 isolation.
+// ============================================================================
+export const ATTACHMENT_LINK_TYPES = [
+  "image",
+  "transcription",
+  "checkpoint",
+  "detailed_summary",
+  "study_guide_section",
+] as const;
+export type AttachmentLinkType = (typeof ATTACHMENT_LINK_TYPES)[number];
+
+export const attachments = pgTable("attachments", {
+  id: varchar("id").primaryKey(),
+  notebookId: varchar("notebook_id")
+    .references(() => notebooks.id, { onDelete: "cascade" })
+    .notNull(),
+  objectPath: text("object_path").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileSize: integer("file_size").notNull(),
+  uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
+  // Optional link to a specific item (timeline item, detailed summary, or study guide section)
+  linkedToType: text("linked_to_type"),
+  linkedToId: text("linked_to_id"),
+});
+
+export const insertAttachmentSchema = createInsertSchema(attachments).omit({
+  uploadedAt: true,
+});
+
+export type InsertAttachment = z.infer<typeof insertAttachmentSchema>;
+export type Attachment = typeof attachments.$inferSelect;
+
+export const attachmentsRelations = relations(attachments, ({ one }) => ({
+  notebook: one(notebooks, {
+    fields: [attachments.notebookId],
+    references: [notebooks.id],
+  }),
+}));
+
+// Separate block-mapping table for attachment rows on the Notion subpage.
+// Strict phase-2 isolation: NEVER reuse notion_block_mappings for attachments.
+export const attachmentBlockMappings = pgTable("attachment_block_mappings", {
+  attachmentId: varchar("attachment_id")
+    .primaryKey()
+    .references(() => attachments.id, { onDelete: "cascade" }),
+  notionBlockId: text("notion_block_id").notNull(),
+});
+
+export type AttachmentBlockMapping = typeof attachmentBlockMappings.$inferSelect;

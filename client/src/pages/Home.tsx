@@ -48,9 +48,11 @@ import {
   GraduationCap,
   RefreshCw,
   Check,
+  Paperclip,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
+import { AttachmentsPanel, AttachmentBadges } from "@/components/AttachmentsPanel";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -176,6 +178,7 @@ export default function Home() {
   const photosInputRef = useRef<HTMLInputElement>(null);
   const timelineTopRef = useRef<HTMLDivElement>(null);
   const timelineBottomRef = useRef<HTMLDivElement>(null);
+  const attachmentsZoneRef = useRef<HTMLDivElement>(null);
   const prevTimelineLengthRef = useRef<number>(0);
   
   // Detect mobile for native camera usage (SSR-safe)
@@ -268,6 +271,8 @@ export default function Home() {
     detailedSummaryGenerating: boolean;
     autoStudyGuideOnEnd: boolean;
     studyGuideGenerating: boolean;
+    mirrorAttachmentsToNotion: boolean;
+    attachmentsSubpageId: string | null;
   };
   type DetailedSummary = {
     id: string;
@@ -301,6 +306,11 @@ export default function Home() {
     queryKey: ["/api/notion/pages"],
     enabled: settingsOpen,
     staleTime: 60_000,
+  });
+
+  const { data: attachmentsList = [] } = useQuery<import("@shared/schema").Attachment[]>({
+    queryKey: ["/api/notebooks", selectedNotebookId, "attachments"],
+    enabled: !!selectedNotebookId,
   });
 
   const displayedTimeline = newestFirst ? [...timeline].reverse() : timeline;
@@ -441,6 +451,21 @@ export default function Home() {
         description: vars.enabled
           ? "New captures will be mirrored to Notion."
           : "New captures will stay local. Use Send to Notion to push manually.",
+      });
+    },
+  });
+
+  const toggleMirrorAttachmentsMutation = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      return await apiRequest("PATCH", `/api/notebooks/${id}`, { mirrorAttachmentsToNotion: enabled });
+    },
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", vars.id] });
+      toast({
+        title: vars.enabled ? "Attachment mirroring on" : "Attachment mirroring off",
+        description: vars.enabled
+          ? "New attachments will be added to a Notion subpage."
+          : "Attachments will stay local only.",
       });
     },
   });
@@ -1575,6 +1600,16 @@ export default function Home() {
                         </div>
                       </div>
                     )}
+                    {attachmentsList.some((a) => a.linkedToId === item.id && a.linkedToType === "image") && (
+                      <div className="px-3 pb-2">
+                        <AttachmentBadges
+                          itemId={item.id}
+                          attachments={attachmentsList}
+                          linkedToType="image"
+                          onJumpToPanel={() => attachmentsZoneRef.current?.scrollIntoView({ behavior: "smooth" })}
+                        />
+                      </div>
+                    )}
                   </div>
                 );
               } else if (item.type === "transcription") {
@@ -1600,6 +1635,12 @@ export default function Home() {
                         <Copy className="w-3 h-3" />
                       </Button>
                     </div>
+                    <AttachmentBadges
+                      itemId={item.id}
+                      attachments={attachmentsList}
+                      linkedToType="transcription"
+                      onJumpToPanel={() => attachmentsZoneRef.current?.scrollIntoView({ behavior: "smooth" })}
+                    />
                   </div>
                 );
               } else {
@@ -1607,23 +1648,45 @@ export default function Home() {
                 return (
                   <div
                     key={`checkpoint-${item.id}`}
-                    className="flex items-center gap-2 py-2"
+                    className="flex flex-col gap-1 py-2"
                     data-testid={`card-checkpoint-${item.id}`}
                   >
-                    <Separator className="flex-1" />
-                    <Badge variant="outline" className="gap-1">
-                      <Flag className="w-3 h-3" />
-                      {cp.label || "Checkpoint"}
-                      <span className="text-muted-foreground">
-                        {formatTime(item.timestamp)}
-                      </span>
-                    </Badge>
-                    <Separator className="flex-1" />
+                    <div className="flex items-center gap-2">
+                      <Separator className="flex-1" />
+                      <Badge variant="outline" className="gap-1">
+                        <Flag className="w-3 h-3" />
+                        {cp.label || "Checkpoint"}
+                        <span className="text-muted-foreground">
+                          {formatTime(item.timestamp)}
+                        </span>
+                      </Badge>
+                      <Separator className="flex-1" />
+                    </div>
+                    {attachmentsList.some((a) => a.linkedToId === item.id && a.linkedToType === "checkpoint") && (
+                      <div className="flex justify-center">
+                        <AttachmentBadges
+                          itemId={item.id}
+                          attachments={attachmentsList}
+                          linkedToType="checkpoint"
+                          onJumpToPanel={() => attachmentsZoneRef.current?.scrollIntoView({ behavior: "smooth" })}
+                        />
+                      </div>
+                    )}
                   </div>
                 );
               }
             })}
             <div ref={timelineBottomRef} />
+          </div>
+        )}
+
+        {/* Attachments zone — always visible when a notebook is selected */}
+        {selectedNotebookId && (
+          <div ref={attachmentsZoneRef}>
+            <AttachmentsPanel
+              notebookId={selectedNotebookId}
+              timeline={timeline}
+            />
           </div>
         )}
       </main>
@@ -1895,6 +1958,30 @@ export default function Home() {
                     study guide will be generated into a new Notion subpage.
                   </p>
                 </div>
+                {notebookDetail.notionSyncEnabled && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="mirror-attachments-to-notion">
+                        Mirror attachments to Notion
+                      </Label>
+                      <Switch
+                        id="mirror-attachments-to-notion"
+                        checked={!!notebookDetail.mirrorAttachmentsToNotion}
+                        onCheckedChange={(v) =>
+                          toggleMirrorAttachmentsMutation.mutate({
+                            id: selectedNotebookId,
+                            enabled: v,
+                          })
+                        }
+                        data-testid="switch-mirror-attachments-to-notion"
+                      />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      When on, files added to the Attachments zone will be listed
+                      in a dedicated "Attachments" subpage in Notion.
+                    </p>
+                  </div>
+                )}
               </>
             )}
             <Separator />
@@ -2040,6 +2127,7 @@ export default function Home() {
         }
         openedSummaryId={openedSummaryId}
         setOpenedSummaryId={setOpenedSummaryId}
+        onJumpToAttachments={() => attachmentsZoneRef.current?.scrollIntoView({ behavior: "smooth" })}
       />
 
       <StudyGuidesDialog
@@ -2061,6 +2149,7 @@ export default function Home() {
         }
         openedStudyGuideId={openedStudyGuideId}
         setOpenedStudyGuideId={setOpenedStudyGuideId}
+        onJumpToAttachments={() => attachmentsZoneRef.current?.scrollIntoView({ behavior: "smooth" })}
       />
 
     </div>
@@ -2078,6 +2167,7 @@ interface DetailedSummariesDialogProps {
   onToggleAuto: (enabled: boolean) => void;
   openedSummaryId: string | null;
   setOpenedSummaryId: (id: string | null) => void;
+  onJumpToAttachments: () => void;
 }
 
 interface DetailedSummaryRow {
@@ -2095,13 +2185,19 @@ function DetailedSummariesDialog(props: DetailedSummariesDialogProps) {
   const {
     open, onOpenChange, notebookId, notebookDetail,
     onGenerate, isGenerating, autoOnEnd, onToggleAuto,
-    openedSummaryId, setOpenedSummaryId,
+    openedSummaryId, setOpenedSummaryId, onJumpToAttachments,
   } = props;
 
   const { data: summaries = [], isLoading } = useQuery<DetailedSummaryRow[]>({
     queryKey: ["/api/notebooks", notebookId, "detailed-summaries"],
     enabled: open && !!notebookId,
     refetchInterval: open ? 4000 : false,
+  });
+
+  const { data: attachmentsForSummaries = [] } = useQuery<import("@shared/schema").Attachment[]>({
+    queryKey: ["/api/notebooks", notebookId, "attachments"],
+    enabled: open && !!notebookId,
+    staleTime: 30_000,
   });
 
   const opened: DetailedSummaryRow | null =
@@ -2228,6 +2324,12 @@ function DetailedSummariesDialog(props: DetailedSummariesDialogProps) {
                       Local only — Notion push pending
                     </span>
                   )}
+                  <AttachmentBadges
+                    itemId={s.id}
+                    attachments={attachmentsForSummaries}
+                    linkedToType="detailed_summary"
+                    onJumpToPanel={() => { onOpenChange(false); onJumpToAttachments(); }}
+                  />
                 </li>
               ))}
             </ul>
@@ -2249,6 +2351,7 @@ interface StudyGuidesDialogProps {
   onToggleAuto: (enabled: boolean) => void;
   openedStudyGuideId: string | null;
   setOpenedStudyGuideId: (id: string | null) => void;
+  onJumpToAttachments: () => void;
 }
 
 interface StudyGuideRowApi {
@@ -2341,7 +2444,7 @@ function StudyGuidesDialog(props: StudyGuidesDialogProps) {
   const {
     open, onOpenChange, notebookId, notebookDetail,
     onGenerate, isGenerating, autoOnEnd, onToggleAuto,
-    openedStudyGuideId, setOpenedStudyGuideId,
+    openedStudyGuideId, setOpenedStudyGuideId, onJumpToAttachments,
   } = props;
   const { toast } = useToast();
 
@@ -2349,6 +2452,12 @@ function StudyGuidesDialog(props: StudyGuidesDialogProps) {
     queryKey: ["/api/notebooks", notebookId, "study-guides"],
     enabled: open && !!notebookId,
     refetchInterval: open ? 4000 : false,
+  });
+
+  const { data: attachmentsForGuides = [] } = useQuery<import("@shared/schema").Attachment[]>({
+    queryKey: ["/api/notebooks", notebookId, "attachments"],
+    enabled: open && !!notebookId,
+    staleTime: 30_000,
   });
 
   const opened: StudyGuideRowApi | null =
@@ -2582,6 +2691,14 @@ function StudyGuidesDialog(props: StudyGuidesDialogProps) {
                           <MarkdownRenderer content={body || "_[needs review]_"} />
                         </div>
 
+                        {/* Attachment badges linked to this specific section */}
+                        <AttachmentBadges
+                          itemId={`${opened.id}:${section}`}
+                          attachments={attachmentsForGuides}
+                          linkedToType="study_guide_section"
+                          onJumpToPanel={() => { onOpenChange(false); onJumpToAttachments(); }}
+                        />
+
                         {(() => {
                           const flagged = lines
                             .map((l, idx) => ({ l, idx }))
@@ -2683,6 +2800,26 @@ function StudyGuidesDialog(props: StudyGuidesDialogProps) {
                         Local only — Notion push pending
                       </span>
                     )}
+                    {/* Show badges for any section of this guide that has linked attachments */}
+                    {attachmentsForGuides
+                      .filter((a) => a.linkedToType === "study_guide_section" && a.linkedToId?.startsWith(g.id + ":"))
+                      .map((a) => {
+                        const sectionName = a.linkedToId?.split(":")[1] ?? "";
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); onOpenChange(false); onJumpToAttachments(); }}
+                            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1 mr-1"
+                            title={`Attachment: ${a.fileName} (${SG_SECTION_LABELS[sectionName as SgSection] ?? sectionName})`}
+                            data-testid={`badge-attachment-${a.id}`}
+                          >
+                            <Paperclip className="w-3 h-3 shrink-0" />
+                            <span className="truncate max-w-[14ch]">{a.fileName}</span>
+                          </button>
+                        );
+                      })
+                    }
                   </li>
                 );
               })}

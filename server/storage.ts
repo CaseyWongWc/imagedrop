@@ -11,6 +11,8 @@ import {
   detailedSummaryBlockMappings,
   studyGuides,
   studyGuideBlockMappings,
+  attachments,
+  attachmentBlockMappings,
   type Notebook,
   type InsertNotebook,
   type Image,
@@ -23,6 +25,8 @@ import {
   type InsertDetailedSummary,
   type StudyGuide,
   type StudyGuideBlockMapping,
+  type Attachment,
+  type InsertAttachment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -30,9 +34,10 @@ export interface IStorage {
   createNotebook(notebook: InsertNotebook): Promise<Notebook>;
   getNotebook(id: string): Promise<Notebook | undefined>;
   getAllNotebooks(): Promise<Notebook[]>;
-  updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean; autoStudyGuideOnEnd?: boolean }): Promise<Notebook | undefined>;
+  updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean; autoStudyGuideOnEnd?: boolean; mirrorAttachmentsToNotion?: boolean }): Promise<Notebook | undefined>;
   setNotebookNotionPage(id: string, notionPageId: string | null): Promise<Notebook | undefined>;
   setNotebookSyncError(id: string, error: string | null): Promise<Notebook | undefined>;
+  setNotebookAttachmentsSubpage(id: string, subpageId: string | null): Promise<Notebook | undefined>;
   deleteNotebook(id: string): Promise<void>;
 
   // Image operations
@@ -74,6 +79,17 @@ export interface IStorage {
   setDetailedSummarySubpage(id: string, subpageId: string | null, subpageUrl: string | null): Promise<DetailedSummary | undefined>;
   recordDetailedSummaryBlocks(detailedSummaryId: string, blockIds: string[]): Promise<void>;
   clearDetailedSummaryBlocks(detailedSummaryId: string): Promise<void>;
+
+  // Attachment (Phase-2) operations
+  createAttachment(attachment: InsertAttachment): Promise<Attachment>;
+  getAttachment(id: string): Promise<Attachment | undefined>;
+  getAttachmentsByNotebook(notebookId: string): Promise<Attachment[]>;
+  updateAttachmentLink(id: string, linkedToType: string | null, linkedToId: string | null): Promise<Attachment | undefined>;
+  // Block-mapping table operations (separate from notion_block_mappings — phase-2 isolation)
+  getAttachmentNotionBlockId(attachmentId: string): Promise<string | null>;
+  setAttachmentNotionBlockId(attachmentId: string, notionBlockId: string | null): Promise<void>;
+  clearAttachmentBlockMappingsByNotebook(notebookId: string): Promise<void>;
+  deleteAttachment(id: string): Promise<void>;
 
   // Study guide (Phase-2) operations
   createStudyGuide(data: {
@@ -129,7 +145,7 @@ export class DbStorage implements IStorage {
     return db.select().from(notebooks).orderBy(desc(notebooks.createdAt));
   }
 
-  async updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean; autoStudyGuideOnEnd?: boolean }): Promise<Notebook | undefined> {
+  async updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean; autoStudyGuideOnEnd?: boolean; mirrorAttachmentsToNotion?: boolean }): Promise<Notebook | undefined> {
     const updateData: Record<string, any> = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.className !== undefined) updateData.className = data.className;
@@ -137,10 +153,20 @@ export class DbStorage implements IStorage {
     if (data.sessionEnded !== undefined) updateData.sessionEnded = data.sessionEnded;
     if (data.autoDetailedSummaryOnEnd !== undefined) updateData.autoDetailedSummaryOnEnd = data.autoDetailedSummaryOnEnd;
     if (data.autoStudyGuideOnEnd !== undefined) updateData.autoStudyGuideOnEnd = data.autoStudyGuideOnEnd;
+    if (data.mirrorAttachmentsToNotion !== undefined) updateData.mirrorAttachmentsToNotion = data.mirrorAttachmentsToNotion;
     if (Object.keys(updateData).length === 0) {
       return this.getNotebook(id);
     }
     const [updated] = await db.update(notebooks).set(updateData).where(eq(notebooks.id, id)).returning();
+    return updated;
+  }
+
+  async setNotebookAttachmentsSubpage(id: string, subpageId: string | null): Promise<Notebook | undefined> {
+    const [updated] = await db
+      .update(notebooks)
+      .set({ attachmentsSubpageId: subpageId })
+      .where(eq(notebooks.id, id))
+      .returning();
     return updated;
   }
 
@@ -406,6 +432,82 @@ export class DbStorage implements IStorage {
     await db
       .delete(detailedSummaryBlockMappings)
       .where(eq(detailedSummaryBlockMappings.detailedSummaryId, detailedSummaryId));
+  }
+
+  // ============ Attachment (Phase-2) operations ============
+  async createAttachment(insertAttachment: InsertAttachment): Promise<Attachment> {
+    const [row] = await db.insert(attachments).values(insertAttachment).returning();
+    return row;
+  }
+
+  async getAttachment(id: string): Promise<Attachment | undefined> {
+    const [row] = await db.select().from(attachments).where(eq(attachments.id, id));
+    return row;
+  }
+
+  async getAttachmentsByNotebook(notebookId: string): Promise<Attachment[]> {
+    return db
+      .select()
+      .from(attachments)
+      .where(eq(attachments.notebookId, notebookId))
+      .orderBy(asc(attachments.uploadedAt));
+  }
+
+  async updateAttachmentLink(
+    id: string,
+    linkedToType: string | null,
+    linkedToId: string | null
+  ): Promise<Attachment | undefined> {
+    const [updated] = await db
+      .update(attachments)
+      .set({ linkedToType, linkedToId })
+      .where(eq(attachments.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getAttachmentNotionBlockId(attachmentId: string): Promise<string | null> {
+    const [row] = await db
+      .select()
+      .from(attachmentBlockMappings)
+      .where(eq(attachmentBlockMappings.attachmentId, attachmentId));
+    return row?.notionBlockId ?? null;
+  }
+
+  async setAttachmentNotionBlockId(
+    attachmentId: string,
+    notionBlockId: string | null
+  ): Promise<void> {
+    if (!notionBlockId) {
+      await db
+        .delete(attachmentBlockMappings)
+        .where(eq(attachmentBlockMappings.attachmentId, attachmentId));
+    } else {
+      await db
+        .insert(attachmentBlockMappings)
+        .values({ attachmentId, notionBlockId })
+        .onConflictDoUpdate({
+          target: attachmentBlockMappings.attachmentId,
+          set: { notionBlockId },
+        });
+    }
+  }
+
+  async clearAttachmentBlockMappingsByNotebook(notebookId: string): Promise<void> {
+    // Delete all attachment block mappings for a given notebook (used during 404 recovery)
+    const notebookAttachments = await db
+      .select({ id: attachments.id })
+      .from(attachments)
+      .where(eq(attachments.notebookId, notebookId));
+    for (const { id } of notebookAttachments) {
+      await db
+        .delete(attachmentBlockMappings)
+        .where(eq(attachmentBlockMappings.attachmentId, id));
+    }
+  }
+
+  async deleteAttachment(id: string): Promise<void> {
+    await db.delete(attachments).where(eq(attachments.id, id));
   }
 
   // ============ Study guide (Phase-2) operations ============

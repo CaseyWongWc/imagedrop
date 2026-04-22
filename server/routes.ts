@@ -11,11 +11,14 @@ import {
   insertTranscriptionSchema, 
   insertNotebookSchema,
   insertCheckpointSchema,
+  insertAttachmentSchema,
+  ATTACHMENT_LINK_TYPES,
   type Image,
   type Transcription,
   type Checkpoint,
   type TimelineItem,
   type DetailedSummary,
+  type Attachment,
 } from "@shared/schema";
 import { TranscriptionService } from "./transcription";
 import { VisionService } from "./vision";
@@ -35,6 +38,7 @@ import {
   type StudyGuide,
 } from "@shared/schema";
 import { enqueueSync, getSyncStatus, getSyncQueueLength, backfillNotebook, isBackfilling } from "./notionSync";
+import { enqueueAttachmentSync } from "./attachmentSync";
 import { randomUUID } from "crypto";
 
 // In-memory tracker for in-flight detailed-summary generations per notebook.
@@ -751,14 +755,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update notebook
   app.patch("/api/notebooks/:id", async (req, res) => {
     try {
-      const { title, className, notionSyncEnabled, sessionEnded, autoDetailedSummaryOnEnd, autoStudyGuideOnEnd } = req.body;
+      const { title, className, notionSyncEnabled, sessionEnded, autoDetailedSummaryOnEnd, autoStudyGuideOnEnd, mirrorAttachmentsToNotion } = req.body;
       if (
         !title &&
         className === undefined &&
         notionSyncEnabled === undefined &&
         sessionEnded === undefined &&
         autoDetailedSummaryOnEnd === undefined &&
-        autoStudyGuideOnEnd === undefined
+        autoStudyGuideOnEnd === undefined &&
+        mirrorAttachmentsToNotion === undefined
       ) {
         return res.status(400).json({ error: "No fields to update" });
       }
@@ -780,6 +785,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ) {
         return res.status(400).json({ error: "autoStudyGuideOnEnd must be a boolean" });
       }
+      if (
+        mirrorAttachmentsToNotion !== undefined &&
+        typeof mirrorAttachmentsToNotion !== "boolean"
+      ) {
+        return res.status(400).json({ error: "mirrorAttachmentsToNotion must be a boolean" });
+      }
       const before = await storage.getNotebook(req.params.id);
       const updated = await storage.updateNotebook(req.params.id, {
         title,
@@ -788,6 +799,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         sessionEnded,
         autoDetailedSummaryOnEnd,
         autoStudyGuideOnEnd,
+        mirrorAttachmentsToNotion,
       });
       if (!updated) {
         return res.status(404).json({ error: "Notebook not found" });
@@ -1603,6 +1615,120 @@ ${formatted}`,
         });
       }
       res.json({ summary: fallback, summaryId: finalSummaryId });
+    }
+  });
+
+  // ============ ATTACHMENT ROUTES ============
+
+  // List attachments for a notebook
+  app.get("/api/notebooks/:id/attachments", async (req, res) => {
+    try {
+      const attachmentsList = await storage.getAttachmentsByNotebook(req.params.id);
+      res.json(attachmentsList);
+    } catch (error) {
+      console.error("Error fetching attachments:", error);
+      res.status(500).json({ error: "Failed to fetch attachments" });
+    }
+  });
+
+  // Create attachment record (after the file has been uploaded to object storage)
+  app.post("/api/notebooks/:id/attachments", async (req, res) => {
+    try {
+      const notebookId = req.params.id;
+      const notebook = await storage.getNotebook(notebookId);
+      if (!notebook) return res.status(404).json({ error: "Notebook not found" });
+
+      const validatedData = insertAttachmentSchema.parse({
+        id: randomUUID(),
+        notebookId,
+        ...req.body,
+      });
+      const attachment = await storage.createAttachment(validatedData);
+      res.json(attachment);
+
+      // Kick off Notion mirroring asynchronously (best-effort)
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      enqueueAttachmentSync(
+        notebookId,
+        { kind: "upsert", attachmentId: attachment.id },
+        baseUrl
+      );
+    } catch (error) {
+      console.error("Error creating attachment:", error);
+      res.status(400).json({ error: "Invalid attachment data" });
+    }
+  });
+
+  // Update attachment link (link to a specific timeline item)
+  app.patch("/api/attachments/:id/link", async (req, res) => {
+    try {
+      const attachment = await storage.getAttachment(req.params.id);
+      if (!attachment) return res.status(404).json({ error: "Attachment not found" });
+
+      const { linkedToType, linkedToId } = req.body;
+
+      // Validate linkedToType against the allowed enum values (null is allowed to clear a link)
+      if (linkedToType != null && !(ATTACHMENT_LINK_TYPES as readonly string[]).includes(linkedToType)) {
+        return res.status(400).json({ error: `Invalid linkedToType: ${linkedToType}` });
+      }
+
+      const updated = await storage.updateAttachmentLink(
+        req.params.id,
+        linkedToType ?? null,
+        linkedToId ?? null
+      );
+      res.json(updated);
+
+      // Re-mirror to Notion to reflect the link change
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      enqueueAttachmentSync(
+        attachment.notebookId,
+        { kind: "upsert", attachmentId: attachment.id },
+        baseUrl
+      );
+    } catch (error) {
+      console.error("Error updating attachment link:", error);
+      res.status(500).json({ error: "Failed to update attachment link" });
+    }
+  });
+
+  // Delete an attachment
+  app.delete("/api/attachments/:id", async (req, res) => {
+    try {
+      const attachment = await storage.getAttachment(req.params.id);
+      if (!attachment) return res.status(404).json({ error: "Attachment not found" });
+
+      const { notebookId, objectPath } = attachment;
+
+      // Fetch notion block ID from the separate mapping table before deleting the row
+      const notionBlockId = await storage.getAttachmentNotionBlockId(req.params.id);
+
+      // Delete from object storage
+      try {
+        const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
+        await objectFile.delete();
+      } catch (e) {
+        if (!(e instanceof ObjectNotFoundError)) {
+          console.error(`Error deleting attachment object ${objectPath}:`, e);
+        }
+      }
+
+      // Delete the DB record first (cascades to attachment_block_mappings) so UI updates immediately
+      await storage.deleteAttachment(req.params.id);
+      res.json({ success: true });
+
+      // Enqueue Notion block deletion (best-effort, fire-and-forget)
+      if (notionBlockId) {
+        const baseUrl = `${req.protocol}://${req.get("host")}`;
+        enqueueAttachmentSync(
+          notebookId,
+          { kind: "delete", attachmentId: req.params.id, notionBlockId },
+          baseUrl
+        );
+      }
+    } catch (error) {
+      console.error("Error deleting attachment:", error);
+      res.status(500).json({ error: "Failed to delete attachment" });
     }
   });
 
