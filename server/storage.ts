@@ -9,6 +9,8 @@ import {
   notionBlockMappings,
   detailedSummaries,
   detailedSummaryBlockMappings,
+  studyGuides,
+  studyGuideBlockMappings,
   type Notebook,
   type InsertNotebook,
   type Image,
@@ -19,6 +21,8 @@ import {
   type InsertCheckpoint,
   type DetailedSummary,
   type InsertDetailedSummary,
+  type StudyGuide,
+  type StudyGuideBlockMapping,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -26,7 +30,7 @@ export interface IStorage {
   createNotebook(notebook: InsertNotebook): Promise<Notebook>;
   getNotebook(id: string): Promise<Notebook | undefined>;
   getAllNotebooks(): Promise<Notebook[]>;
-  updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean }): Promise<Notebook | undefined>;
+  updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean; autoStudyGuideOnEnd?: boolean }): Promise<Notebook | undefined>;
   setNotebookNotionPage(id: string, notionPageId: string | null): Promise<Notebook | undefined>;
   setNotebookSyncError(id: string, error: string | null): Promise<Notebook | undefined>;
   deleteNotebook(id: string): Promise<void>;
@@ -70,6 +74,43 @@ export interface IStorage {
   setDetailedSummarySubpage(id: string, subpageId: string | null, subpageUrl: string | null): Promise<DetailedSummary | undefined>;
   recordDetailedSummaryBlocks(detailedSummaryId: string, blockIds: string[]): Promise<void>;
   clearDetailedSummaryBlocks(detailedSummaryId: string): Promise<void>;
+
+  // Study guide (Phase-2) operations
+  createStudyGuide(data: {
+    id: string;
+    notebookId: string;
+    sections: string;
+    sectionVersions: string;
+    model: string;
+    tokenCount: number;
+  }): Promise<StudyGuide>;
+  getStudyGuide(id: string): Promise<StudyGuide | undefined>;
+  getStudyGuidesByNotebook(notebookId: string): Promise<StudyGuide[]>;
+  updateStudyGuideSection(
+    id: string,
+    section: string,
+    nextSectionsJson: string,
+    nextSectionVersionsJson: string,
+    tokenCount: number
+  ): Promise<StudyGuide | undefined>;
+  setStudyGuideSubpage(
+    id: string,
+    subpageId: string | null,
+    subpageUrl: string | null,
+    topAnchorBlockId?: string | null
+  ): Promise<StudyGuide | undefined>;
+  setStudyGuideReviewedItems(id: string, items: string[]): Promise<StudyGuide | undefined>;
+  recordStudyGuideSectionBlocks(
+    studyGuideId: string,
+    sectionName: string,
+    blockIds: string[]
+  ): Promise<void>;
+  getStudyGuideSectionBlocks(
+    studyGuideId: string,
+    sectionName: string
+  ): Promise<string[]>;
+  getAllStudyGuideBlockMappings(studyGuideId: string): Promise<StudyGuideBlockMapping[]>;
+  clearStudyGuideBlockMappings(studyGuideId: string): Promise<void>;
 }
 
 export class DbStorage implements IStorage {
@@ -88,13 +129,14 @@ export class DbStorage implements IStorage {
     return db.select().from(notebooks).orderBy(desc(notebooks.createdAt));
   }
 
-  async updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean }): Promise<Notebook | undefined> {
+  async updateNotebook(id: string, data: { title?: string; className?: string | null; notionSyncEnabled?: boolean; sessionEnded?: boolean; autoDetailedSummaryOnEnd?: boolean; autoStudyGuideOnEnd?: boolean }): Promise<Notebook | undefined> {
     const updateData: Record<string, any> = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.className !== undefined) updateData.className = data.className;
     if (data.notionSyncEnabled !== undefined) updateData.notionSyncEnabled = data.notionSyncEnabled;
     if (data.sessionEnded !== undefined) updateData.sessionEnded = data.sessionEnded;
     if (data.autoDetailedSummaryOnEnd !== undefined) updateData.autoDetailedSummaryOnEnd = data.autoDetailedSummaryOnEnd;
+    if (data.autoStudyGuideOnEnd !== undefined) updateData.autoStudyGuideOnEnd = data.autoStudyGuideOnEnd;
     if (Object.keys(updateData).length === 0) {
       return this.getNotebook(id);
     }
@@ -364,6 +406,141 @@ export class DbStorage implements IStorage {
     await db
       .delete(detailedSummaryBlockMappings)
       .where(eq(detailedSummaryBlockMappings.detailedSummaryId, detailedSummaryId));
+  }
+
+  // ============ Study guide (Phase-2) operations ============
+  async createStudyGuide(data: {
+    id: string;
+    notebookId: string;
+    sections: string;
+    sectionVersions: string;
+    model: string;
+    tokenCount: number;
+  }): Promise<StudyGuide> {
+    const [row] = await db.insert(studyGuides).values(data).returning();
+    return row;
+  }
+
+  async getStudyGuide(id: string): Promise<StudyGuide | undefined> {
+    const [row] = await db.select().from(studyGuides).where(eq(studyGuides.id, id));
+    return row;
+  }
+
+  async getStudyGuidesByNotebook(notebookId: string): Promise<StudyGuide[]> {
+    return db
+      .select()
+      .from(studyGuides)
+      .where(eq(studyGuides.notebookId, notebookId))
+      .orderBy(desc(studyGuides.createdAt));
+  }
+
+  async updateStudyGuideSection(
+    id: string,
+    _section: string,
+    nextSectionsJson: string,
+    nextSectionVersionsJson: string,
+    tokenCount: number
+  ): Promise<StudyGuide | undefined> {
+    const [updated] = await db
+      .update(studyGuides)
+      .set({
+        sections: nextSectionsJson,
+        sectionVersions: nextSectionVersionsJson,
+        tokenCount,
+      })
+      .where(eq(studyGuides.id, id))
+      .returning();
+    return updated;
+  }
+
+  async setStudyGuideSubpage(
+    id: string,
+    subpageId: string | null,
+    subpageUrl: string | null,
+    topAnchorBlockId?: string | null
+  ): Promise<StudyGuide | undefined> {
+    const patch: Partial<StudyGuide> = {
+      notionSubpageId: subpageId,
+      notionSubpageUrl: subpageUrl,
+    };
+    if (topAnchorBlockId !== undefined) {
+      patch.topAnchorBlockId = topAnchorBlockId;
+    } else if (subpageId === null) {
+      // If we're clearing the subpage, also clear the anchor — it's only
+      // meaningful in the context of an existing subpage.
+      patch.topAnchorBlockId = null;
+    }
+    const [updated] = await db
+      .update(studyGuides)
+      .set(patch)
+      .where(eq(studyGuides.id, id))
+      .returning();
+    return updated;
+  }
+
+  async setStudyGuideReviewedItems(
+    id: string,
+    items: string[]
+  ): Promise<StudyGuide | undefined> {
+    const [updated] = await db
+      .update(studyGuides)
+      .set({ reviewedItems: items })
+      .where(eq(studyGuides.id, id))
+      .returning();
+    return updated;
+  }
+
+  async recordStudyGuideSectionBlocks(
+    studyGuideId: string,
+    sectionName: string,
+    blockIds: string[]
+  ): Promise<void> {
+    await db
+      .delete(studyGuideBlockMappings)
+      .where(
+        and(
+          eq(studyGuideBlockMappings.studyGuideId, studyGuideId),
+          eq(studyGuideBlockMappings.sectionName, sectionName)
+        )
+      );
+    if (blockIds.length === 0) return;
+    await db.insert(studyGuideBlockMappings).values({
+      id: randomUUID(),
+      studyGuideId,
+      sectionName,
+      blockIds,
+    });
+  }
+
+  async getStudyGuideSectionBlocks(
+    studyGuideId: string,
+    sectionName: string
+  ): Promise<string[]> {
+    const [row] = await db
+      .select()
+      .from(studyGuideBlockMappings)
+      .where(
+        and(
+          eq(studyGuideBlockMappings.studyGuideId, studyGuideId),
+          eq(studyGuideBlockMappings.sectionName, sectionName)
+        )
+      );
+    return row?.blockIds ?? [];
+  }
+
+  async getAllStudyGuideBlockMappings(
+    studyGuideId: string
+  ): Promise<StudyGuideBlockMapping[]> {
+    return db
+      .select()
+      .from(studyGuideBlockMappings)
+      .where(eq(studyGuideBlockMappings.studyGuideId, studyGuideId));
+  }
+
+  async clearStudyGuideBlockMappings(studyGuideId: string): Promise<void> {
+    await db
+      .delete(studyGuideBlockMappings)
+      .where(eq(studyGuideBlockMappings.studyGuideId, studyGuideId));
   }
 }
 

@@ -250,6 +250,52 @@ export async function appendBlocksInChunks(
   return createdIds;
 }
 
+// Append blocks under a parent, optionally placed immediately after a
+// specific sibling block. Used by per-section study guide regenerate to
+// place freshly generated blocks in the original section's position.
+export async function appendBlocksAfter(
+  parentId: string,
+  afterBlockId: string | null,
+  blocks: NotionBlock[]
+): Promise<string[]> {
+  if (blocks.length === 0) return [];
+  const CHUNK_SIZE = 100;
+  const createdIds: string[] = [];
+  let cursor = afterBlockId;
+  for (let i = 0; i < blocks.length; i += CHUNK_SIZE) {
+    const chunk = blocks.slice(i, i + CHUNK_SIZE);
+    const body: Record<string, unknown> = { children: chunk };
+    if (cursor) body.after = cursor;
+    const res = await connectors.proxy(
+      "notion",
+      `/v1/blocks/${parentId}/children`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+    if (!res.ok) {
+      if (res.status === 404) {
+        throw new NotionNotFoundError(
+          `Notion page or parent block not found: ${parentId}`
+        );
+      }
+      const err = await res.json();
+      throw new Error(`Failed to append blocks: ${JSON.stringify(err)}`);
+    }
+    const data = (await res.json()) as { results?: Array<{ id: string }> };
+    if (data.results) {
+      for (const block of data.results) createdIds.push(block.id);
+      // Chain subsequent chunks after the last newly created block so the
+      // ordering stays correct.
+      const last = data.results[data.results.length - 1];
+      if (last) cursor = last.id;
+    }
+  }
+  return createdIds;
+}
+
 export async function deleteNotionBlock(blockId: string): Promise<void> {
   const res = await connectors.proxy("notion", `/v1/blocks/${blockId}`, {
     method: "DELETE",

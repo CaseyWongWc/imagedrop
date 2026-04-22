@@ -18,6 +18,9 @@ export const notebooks = pgTable("notebooks", {
   // Phase 2: when true, marking a notebook ended auto-triggers a single
   // detailed-summary generation.
   autoDetailedSummaryOnEnd: boolean("auto_detailed_summary_on_end").notNull().default(false),
+  // Phase 2: when true, marking a notebook ended auto-triggers a single
+  // study-guide generation as well.
+  autoStudyGuideOnEnd: boolean("auto_study_guide_on_end").notNull().default(false),
 });
 
 export const insertNotebookSchema = createInsertSchema(notebooks).omit({
@@ -26,6 +29,7 @@ export const insertNotebookSchema = createInsertSchema(notebooks).omit({
   notionSyncError: true,
   sessionEnded: true,
   autoDetailedSummaryOnEnd: true,
+  autoStudyGuideOnEnd: true,
 });
 
 export type InsertNotebook = z.infer<typeof insertNotebookSchema>;
@@ -180,6 +184,82 @@ export const detailedSummaryBlockMappings = pgTable("detailed_summary_block_mapp
 });
 
 export type DetailedSummaryBlockMapping = typeof detailedSummaryBlockMappings.$inferSelect;
+
+// ============================================================================
+// PHASE 2: Study Guides (exam-ready)
+// ----------------------------------------------------------------------------
+// Same architectural pattern as Detailed Summaries: versioned, never
+// overwritten, pushed to a dedicated Notion subpage. Block IDs live in
+// `studyGuideBlockMappings` (NOT `notion_block_mappings`). Per-section
+// regeneration uses the section_name column to delete+re-append only the
+// blocks for one section.
+// ============================================================================
+export const STUDY_GUIDE_SECTION_NAMES = [
+  "topics",
+  "keyConcepts",
+  "definitions",
+  "workedExamples",
+  "practiceQuestions",
+  "flaggedGaps",
+] as const;
+
+export type StudyGuideSectionName = (typeof STUDY_GUIDE_SECTION_NAMES)[number];
+
+// Persisted as JSON on the row. Each value is markdown.
+export type StudyGuideSections = Record<StudyGuideSectionName, string>;
+
+export const studyGuides = pgTable("study_guides", {
+  id: varchar("id").primaryKey(),
+  notebookId: varchar("notebook_id")
+    .references(() => notebooks.id, { onDelete: "cascade" })
+    .notNull(),
+  // JSON-encoded StudyGuideSections — sectioned content so each section
+  // can be regenerated independently.
+  sections: text("sections").notNull(),
+  // JSON-encoded Record<StudyGuideSectionName, number>. Section-level
+  // version counters bump on each per-section regenerate.
+  sectionVersions: text("section_versions").notNull().default("{}"),
+  // User-marked "reviewed" item IDs (local UI only — not pushed to Notion
+  // to avoid drift). Item IDs are stable hashes the renderer assigns to
+  // each [needs review] flagged item.
+  reviewedItems: text("reviewed_items").array().notNull().default([]),
+  model: text("model").notNull(),
+  tokenCount: integer("token_count").notNull().default(0),
+  notionSubpageId: text("notion_subpage_id"),
+  notionSubpageUrl: text("notion_subpage_url"),
+  // Stable Notion block ID of the placeholder block at the very top of the
+  // subpage. Used as the `after` anchor when regenerating the *first*
+  // section so its blocks land in their original position (Notion's API
+  // appends to the end when no `after` is provided).
+  topAnchorBlockId: text("top_anchor_block_id"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type StudyGuide = typeof studyGuides.$inferSelect;
+
+export const studyGuidesRelations = relations(studyGuides, ({ one }) => ({
+  notebook: one(notebooks, {
+    fields: [studyGuides.notebookId],
+    references: [notebooks.id],
+  }),
+}));
+
+// One row per (study_guide, section) so we can delete + re-append the
+// blocks for just one section on a per-section regenerate. Strict isolation
+// from `notion_block_mappings` — see notionSync.ts isolation guard.
+export const studyGuideBlockMappings = pgTable("study_guide_block_mappings", {
+  id: varchar("id").primaryKey(),
+  studyGuideId: varchar("study_guide_id")
+    .references(() => studyGuides.id, { onDelete: "cascade" })
+    .notNull(),
+  sectionName: text("section_name").notNull(),
+  // Ordered Notion block IDs for this section. We track them so per-section
+  // regenerate can delete the old blocks and re-append in place using the
+  // last block of the prior section as the `after` anchor.
+  blockIds: text("block_ids").array().notNull(),
+});
+
+export type StudyGuideBlockMapping = typeof studyGuideBlockMappings.$inferSelect;
 
 // Timeline item type for unified view
 export type TimelineItem = {

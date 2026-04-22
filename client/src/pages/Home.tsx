@@ -45,6 +45,9 @@ import {
   PlayCircle,
   StopCircle,
   FileSearch,
+  GraduationCap,
+  RefreshCw,
+  Check,
 } from "lucide-react";
 import { SiNotion } from "react-icons/si";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
@@ -74,6 +77,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  Accordion,
+  AccordionItem,
+  AccordionTrigger,
+  AccordionContent,
+} from "@/components/ui/accordion";
 import { Label } from "@/components/ui/label";
 import heic2any from "heic2any";
 
@@ -104,6 +113,8 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [summariesPanelOpen, setSummariesPanelOpen] = useState(false);
   const [openedSummaryId, setOpenedSummaryId] = useState<string | null>(null);
+  const [studyGuidesPanelOpen, setStudyGuidesPanelOpen] = useState(false);
+  const [openedStudyGuideId, setOpenedStudyGuideId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isSendingToNotion, setIsSendingToNotion] = useState(false);
   const [notionParentPageId, setNotionParentPageId] = useState<string>(() => {
@@ -255,11 +266,25 @@ export default function Home() {
     sessionEnded: boolean;
     autoDetailedSummaryOnEnd: boolean;
     detailedSummaryGenerating: boolean;
+    autoStudyGuideOnEnd: boolean;
+    studyGuideGenerating: boolean;
   };
   type DetailedSummary = {
     id: string;
     notebookId: string;
     content: string;
+    model: string;
+    tokenCount: number;
+    notionSubpageId: string | null;
+    notionSubpageUrl: string | null;
+    createdAt: string | Date;
+  };
+  type StudyGuideRow = {
+    id: string;
+    notebookId: string;
+    sections: string;
+    sectionVersions: string;
+    reviewedItems: string[];
     model: string;
     tokenCount: number;
     notionSubpageId: string | null;
@@ -470,6 +495,48 @@ export default function Home() {
     onError: (err) => {
       toast({
         title: "Could not generate detailed summary",
+        description: err.message || "Try again in a moment.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const toggleAutoStudyGuideMutation = useMutation({
+    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
+      return await apiRequest("PATCH", `/api/notebooks/${id}`, { autoStudyGuideOnEnd: enabled });
+    },
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", vars.id] });
+    },
+  });
+
+  const generateStudyGuideMutation = useMutation<StudyGuideRow, Error, string>({
+    mutationFn: async (id: string) => {
+      const inSessionSummaries = summaryCards.map((c) => ({
+        text: c.text,
+        timestamp:
+          c.timestamp instanceof Date ? c.timestamp.toISOString() : String(c.timestamp),
+      }));
+      const res = await apiRequest("POST", `/api/notebooks/${id}/study-guides`, {
+        inSessionSummaries,
+      });
+      return (await res.json()) as StudyGuideRow;
+    },
+    onSuccess: (data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", id, "study-guides"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/notebooks", id] });
+      setStudyGuidesPanelOpen(true);
+      setOpenedStudyGuideId(data.id);
+      toast({
+        title: "Study guide ready",
+        description: data.notionSubpageUrl
+          ? "Saved to a new Notion subpage."
+          : "Saved locally. Notion push pending.",
+      });
+    },
+    onError: (err) => {
+      toast({
+        title: "Could not generate study guide",
         description: err.message || "Try again in a moment.",
         variant: "destructive",
       });
@@ -1132,6 +1199,47 @@ export default function Home() {
               <Button
                 variant="ghost"
                 size="icon"
+                onClick={() => generateStudyGuideMutation.mutate(selectedNotebookId)}
+                disabled={
+                  generateStudyGuideMutation.isPending ||
+                  notebookDetail.studyGuideGenerating ||
+                  !notebookDetail.notionPageId ||
+                  timeline.length === 0
+                }
+                aria-label="Generate study guide"
+                title={
+                  !notebookDetail.notionPageId
+                    ? "Send the notebook to Notion first"
+                    : timeline.length === 0
+                    ? "Capture something first"
+                    : "Generate an exam-ready study guide into a new Notion subpage"
+                }
+                data-testid="button-generate-study-guide"
+              >
+                {generateStudyGuideMutation.isPending ||
+                notebookDetail.studyGuideGenerating ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <GraduationCap className="w-4 h-4" />
+                )}
+              </Button>
+            )}
+            {selectedNotebookId && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setStudyGuidesPanelOpen(true)}
+                aria-label="View study guides"
+                title="View study guides"
+                data-testid="button-open-study-guides-panel"
+              >
+                <BookOpen className="w-4 h-4" />
+              </Button>
+            )}
+            {selectedNotebookId && notebookDetail && (
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() =>
                   toggleNotionSyncMutation.mutate({
                     id: selectedNotebookId,
@@ -1740,6 +1848,55 @@ export default function Home() {
                 When on, newly created notebooks will mirror their content to Notion automatically. You can still toggle sync per notebook later.
               </p>
             </div>
+            {selectedNotebookId && notebookDetail && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="auto-detailed-summary-on-end">
+                      Auto-generate detailed summary when this session ends
+                    </Label>
+                    <Switch
+                      id="auto-detailed-summary-on-end"
+                      checked={!!notebookDetail.autoDetailedSummaryOnEnd}
+                      onCheckedChange={(v) =>
+                        toggleAutoDetailedSummaryMutation.mutate({
+                          id: selectedNotebookId,
+                          enabled: v,
+                        })
+                      }
+                      data-testid="switch-auto-detailed-summary-on-end"
+                    />
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    When you mark this notebook's session as ended, a detailed
+                    summary will be generated and pushed to a new Notion subpage.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="auto-study-guide-on-end">
+                      Auto-generate study guide when this session ends
+                    </Label>
+                    <Switch
+                      id="auto-study-guide-on-end"
+                      checked={!!notebookDetail.autoStudyGuideOnEnd}
+                      onCheckedChange={(v) =>
+                        toggleAutoStudyGuideMutation.mutate({
+                          id: selectedNotebookId,
+                          enabled: v,
+                        })
+                      }
+                      data-testid="switch-auto-study-guide-on-end"
+                    />
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    When you mark this notebook's session as ended, an exam-ready
+                    study guide will be generated into a new Notion subpage.
+                  </p>
+                </div>
+              </>
+            )}
             <Separator />
             <div className="space-y-2">
               <Label>Notion Export Destination</Label>
@@ -1883,6 +2040,27 @@ export default function Home() {
         }
         openedSummaryId={openedSummaryId}
         setOpenedSummaryId={setOpenedSummaryId}
+      />
+
+      <StudyGuidesDialog
+        open={studyGuidesPanelOpen}
+        onOpenChange={setStudyGuidesPanelOpen}
+        notebookId={selectedNotebookId}
+        notebookDetail={notebookDetail}
+        onGenerate={() =>
+          selectedNotebookId && generateStudyGuideMutation.mutate(selectedNotebookId)
+        }
+        isGenerating={
+          generateStudyGuideMutation.isPending ||
+          !!notebookDetail?.studyGuideGenerating
+        }
+        autoOnEnd={!!notebookDetail?.autoStudyGuideOnEnd}
+        onToggleAuto={(enabled) =>
+          selectedNotebookId &&
+          toggleAutoStudyGuideMutation.mutate({ id: selectedNotebookId, enabled })
+        }
+        openedStudyGuideId={openedStudyGuideId}
+        setOpenedStudyGuideId={setOpenedStudyGuideId}
       />
 
     </div>
@@ -2052,6 +2230,462 @@ function DetailedSummariesDialog(props: DetailedSummariesDialogProps) {
                   )}
                 </li>
               ))}
+            </ul>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface StudyGuidesDialogProps {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  notebookId: string | null;
+  notebookDetail: { notionPageId: string | null } | undefined;
+  onGenerate: () => void;
+  isGenerating: boolean;
+  autoOnEnd: boolean;
+  onToggleAuto: (enabled: boolean) => void;
+  openedStudyGuideId: string | null;
+  setOpenedStudyGuideId: (id: string | null) => void;
+}
+
+interface StudyGuideRowApi {
+  id: string;
+  notebookId: string;
+  sections: string;
+  sectionVersions: string;
+  reviewedItems: string[];
+  model: string;
+  tokenCount: number;
+  notionSubpageId: string | null;
+  notionSubpageUrl: string | null;
+  createdAt: string | Date;
+}
+
+const SG_SECTION_NAMES = [
+  "topics",
+  "keyConcepts",
+  "definitions",
+  "workedExamples",
+  "practiceQuestions",
+  "flaggedGaps",
+] as const;
+type SgSection = (typeof SG_SECTION_NAMES)[number];
+
+const SG_SECTION_LABELS: Record<SgSection, string> = {
+  topics: "Topics",
+  keyConcepts: "Key Concepts",
+  definitions: "Definitions",
+  workedExamples: "Worked Examples",
+  practiceQuestions: "Practice Questions",
+  flaggedGaps: "Flagged Gaps",
+};
+
+function parseSgSections(json: string): Record<SgSection, string> {
+  const empty: Record<SgSection, string> = {
+    topics: "",
+    keyConcepts: "",
+    definitions: "",
+    workedExamples: "",
+    practiceQuestions: "",
+    flaggedGaps: "",
+  };
+  try {
+    const parsed = JSON.parse(json) as Partial<Record<SgSection, string>>;
+    for (const k of SG_SECTION_NAMES) {
+      if (typeof parsed[k] === "string") empty[k] = parsed[k] as string;
+    }
+  } catch {
+    /* ignore */
+  }
+  return empty;
+}
+
+function parseSgVersions(json: string): Record<SgSection, number> {
+  const out: Record<SgSection, number> = {
+    topics: 1,
+    keyConcepts: 1,
+    definitions: 1,
+    workedExamples: 1,
+    practiceQuestions: 1,
+    flaggedGaps: 1,
+  };
+  try {
+    const parsed = JSON.parse(json) as Partial<Record<SgSection, number>>;
+    for (const k of SG_SECTION_NAMES) {
+      if (typeof parsed[k] === "number") out[k] = parsed[k] as number;
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
+// Stable item id for [needs review] marking. The renderer scans each
+// section's markdown lines and assigns this id to each list-item line that
+// contains [needs review]. Because the marker is rare and the underlying
+// content is stable across regenerations of OTHER sections, this id stays
+// stable enough for "marked reviewed" UI state.
+function reviewItemId(section: SgSection, lineText: string): string {
+  // Cheap stable hash; collisions per-section are vanishingly unlikely.
+  let h = 0;
+  for (let i = 0; i < lineText.length; i++) {
+    h = (h * 31 + lineText.charCodeAt(i)) | 0;
+  }
+  return `${section}:${h}`;
+}
+
+function StudyGuidesDialog(props: StudyGuidesDialogProps) {
+  const {
+    open, onOpenChange, notebookId, notebookDetail,
+    onGenerate, isGenerating, autoOnEnd, onToggleAuto,
+    openedStudyGuideId, setOpenedStudyGuideId,
+  } = props;
+  const { toast } = useToast();
+
+  const { data: guides = [], isLoading } = useQuery<StudyGuideRowApi[]>({
+    queryKey: ["/api/notebooks", notebookId, "study-guides"],
+    enabled: open && !!notebookId,
+    refetchInterval: open ? 4000 : false,
+  });
+
+  const opened: StudyGuideRowApi | null =
+    guides.find((g) => g.id === openedStudyGuideId) ?? null;
+
+  const regenerateSectionMutation = useMutation({
+    mutationFn: async ({ id, section }: { id: string; section: SgSection }) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/study-guides/${id}/sections/${section}/regenerate`,
+        {}
+      );
+      return (await res.json()) as StudyGuideRowApi;
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({
+        queryKey: ["/api/notebooks", notebookId, "study-guides"],
+      });
+      toast({
+        title: `${SG_SECTION_LABELS[vars.section]} regenerated`,
+        description: "The section was updated in place on the Notion subpage.",
+      });
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Regenerate failed",
+        description: err.message || "Try again in a moment.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const reviewedMutation = useMutation({
+    mutationFn: async ({ id, items }: { id: string; items: string[] }) => {
+      const res = await apiRequest(
+        "PATCH",
+        `/api/study-guides/${id}/reviewed`,
+        { reviewedItems: items }
+      );
+      return (await res.json()) as StudyGuideRowApi;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["/api/notebooks", notebookId, "study-guides"],
+      });
+    },
+  });
+
+  const sections = opened ? parseSgSections(opened.sections) : null;
+  const versions = opened ? parseSgVersions(opened.sectionVersions) : null;
+  const reviewedSet = new Set(opened?.reviewedItems ?? []);
+
+  const toggleReviewed = (id: string) => {
+    if (!opened) return;
+    const next = new Set(reviewedSet);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    reviewedMutation.mutate({ id: opened.id, items: Array.from(next) });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Study guides</DialogTitle>
+          <DialogDescription>
+            Exam-ready study guides built from this notebook. Each generation
+            creates a new versioned Notion subpage. Per-section regenerate
+            updates that section in place. Items marked [needs review] need
+            your attention before relying on them.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          <Button
+            onClick={onGenerate}
+            disabled={
+              isGenerating ||
+              !notebookId ||
+              !notebookDetail?.notionPageId
+            }
+            data-testid="button-generate-study-guide-panel"
+          >
+            {isGenerating ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <GraduationCap className="w-4 h-4 mr-2" />
+            )}
+            Generate now
+          </Button>
+          {isGenerating && (
+            <span
+              className="text-xs text-muted-foreground"
+              data-testid="text-study-guide-generating"
+            >
+              Generating
+              {(() => {
+                // Estimate based on the average token count of prior study
+                // guides for this notebook. Falls back to a baseline when we
+                // have no history yet. This is intentionally a rough number,
+                // shown to set expectations during the long model call.
+                const completed = guides.filter((g) => g.tokenCount > 0);
+                const avg =
+                  completed.length > 0
+                    ? Math.round(
+                        completed.reduce((s, g) => s + g.tokenCount, 0) /
+                          completed.length
+                      )
+                    : 3500;
+                return ` · ≈${avg.toLocaleString()} tokens`;
+              })()}
+              …
+            </span>
+          )}
+          <label className="flex items-center gap-2 text-sm text-muted-foreground ml-auto">
+            <input
+              type="checkbox"
+              checked={autoOnEnd}
+              onChange={(e) => onToggleAuto(e.target.checked)}
+              data-testid="checkbox-auto-study-guide"
+            />
+            Auto-generate when session ends
+          </label>
+        </div>
+
+        {!notebookDetail?.notionPageId && (
+          <p className="text-xs text-muted-foreground pt-2">
+            Send the notebook to Notion first — study guides live as subpages
+            under the synced page.
+          </p>
+        )}
+
+        <div className="flex-1 overflow-y-auto mt-3 space-y-2">
+          {opened && sections && versions ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setOpenedStudyGuideId(null)}
+                  data-testid="button-back-to-study-guides-list"
+                >
+                  ← Back
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(opened.createdAt).toLocaleString()} · {opened.model}
+                </span>
+                {opened.notionSubpageUrl && (
+                  <a
+                    href={opened.notionSubpageUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto text-xs flex items-center gap-1 text-muted-foreground hover-elevate px-2 py-1 rounded-md"
+                    data-testid={`link-study-guide-notion-${opened.id}`}
+                  >
+                    <ExternalLink className="w-3 h-3" /> Open in Notion
+                  </a>
+                )}
+              </div>
+
+              {/* Sections are collapsible. Default-open the first one so the
+                  panel isn't empty on first view, but everything else
+                  collapses to keep the long guide skimmable. */}
+              <Accordion
+                type="multiple"
+                defaultValue={[SG_SECTION_NAMES[0]]}
+                className="space-y-2"
+              >
+                {SG_SECTION_NAMES.map((section) => {
+                  const body = sections[section];
+                  const lines = body.split("\n");
+                  const flaggedCount = lines.filter((l) =>
+                    /\[needs review\]/i.test(l)
+                  ).length;
+                  return (
+                    <AccordionItem
+                      key={section}
+                      value={section}
+                      className="border rounded-md px-4"
+                      data-testid={`section-study-guide-${section}`}
+                    >
+                      <AccordionTrigger className="hover:no-underline">
+                        <div className="flex items-center gap-2 flex-wrap flex-1 mr-2">
+                          <span className="text-sm font-semibold">
+                            {SG_SECTION_LABELS[section]}
+                          </span>
+                          <Badge variant="secondary">v{versions[section]}</Badge>
+                          {flaggedCount > 0 && (
+                            <Badge
+                              variant="outline"
+                              className="text-amber-600 border-amber-600/40"
+                            >
+                              {flaggedCount} needs review
+                            </Badge>
+                          )}
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <div className="flex items-center justify-end mb-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={
+                              regenerateSectionMutation.isPending ||
+                              !opened.notionSubpageId
+                            }
+                            title={
+                              !opened.notionSubpageId
+                                ? "No Notion subpage to update — generate a new study guide instead."
+                                : "Regenerate this section in place"
+                            }
+                            onClick={() =>
+                              regenerateSectionMutation.mutate({
+                                id: opened.id,
+                                section,
+                              })
+                            }
+                            data-testid={`button-regenerate-section-${section}`}
+                          >
+                            {regenerateSectionMutation.isPending &&
+                            regenerateSectionMutation.variables?.section === section ? (
+                              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                            ) : (
+                              <RefreshCw className="w-3 h-3 mr-1" />
+                            )}
+                            Regenerate
+                          </Button>
+                        </div>
+
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <MarkdownRenderer content={body || "_[needs review]_"} />
+                        </div>
+
+                        {(() => {
+                          const flagged = lines
+                            .map((l, idx) => ({ l, idx }))
+                            .filter((x) => /\[needs review\]/i.test(x.l));
+                          if (flagged.length === 0) return null;
+                          return (
+                            <div className="mt-3 pt-3 border-t space-y-1">
+                              <p className="text-xs text-muted-foreground">
+                                Items needing review:
+                              </p>
+                              {flagged.map((x) => {
+                                const id = reviewItemId(section, x.l);
+                                const reviewed = reviewedSet.has(id);
+                                return (
+                                  <div
+                                    key={id}
+                                    className="flex items-start gap-2 text-xs"
+                                    data-testid={`row-needs-review-${id}`}
+                                  >
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-6 px-2"
+                                      onClick={() => toggleReviewed(id)}
+                                      data-testid={`button-mark-reviewed-${id}`}
+                                    >
+                                      {reviewed ? (
+                                        <Check className="w-3 h-3 mr-1 text-emerald-500" />
+                                      ) : (
+                                        <Flag className="w-3 h-3 mr-1 text-amber-500" />
+                                      )}
+                                      {reviewed ? "Reviewed" : "Mark reviewed"}
+                                    </Button>
+                                    <span
+                                      className={
+                                        reviewed
+                                          ? "line-through text-muted-foreground"
+                                          : ""
+                                      }
+                                    >
+                                      {x.l.replace(/^[-*\d.\s]+/, "").slice(0, 200)}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                      </AccordionContent>
+                    </AccordionItem>
+                  );
+                })}
+              </Accordion>
+            </div>
+          ) : isLoading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : guides.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No study guides yet. Generate one above.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {guides.map((g) => {
+                const secs = parseSgSections(g.sections);
+                const preview = secs.topics || secs.keyConcepts || "";
+                return (
+                  <li
+                    key={g.id}
+                    className="border rounded-md p-3 hover-elevate cursor-pointer"
+                    onClick={() => setOpenedStudyGuideId(g.id)}
+                    data-testid={`row-study-guide-${g.id}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <GraduationCap className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">
+                        {new Date(g.createdAt).toLocaleString()}
+                      </span>
+                      <span className="text-xs text-muted-foreground ml-auto">
+                        {g.model} · {g.tokenCount} tok
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                      {preview.slice(0, 220)}
+                      {preview.length > 220 ? "…" : ""}
+                    </p>
+                    {g.notionSubpageUrl ? (
+                      <a
+                        href={g.notionSubpageUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-muted-foreground mt-2 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                        data-testid={`link-study-guide-row-${g.id}`}
+                      >
+                        <ExternalLink className="w-3 h-3" /> Notion subpage
+                      </a>
+                    ) : (
+                      <span className="text-xs text-amber-600 mt-2 inline-block">
+                        Local only — Notion push pending
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

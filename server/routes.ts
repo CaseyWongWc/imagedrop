@@ -24,8 +24,16 @@ import {
   listNotionPages,
   createNotionSubpage,
   markdownToNotionBlocks,
+  appendBlocksAfter,
+  deleteNotionBlock,
   NotionNotFoundError,
 } from "./notion";
+import {
+  STUDY_GUIDE_SECTION_NAMES,
+  type StudyGuideSectionName,
+  type StudyGuideSections,
+  type StudyGuide,
+} from "@shared/schema";
 import { enqueueSync, getSyncStatus, getSyncQueueLength, backfillNotebook, isBackfilling } from "./notionSync";
 import { randomUUID } from "crypto";
 
@@ -34,7 +42,11 @@ import { randomUUID } from "crypto";
 // concurrent runs.
 const generatingDetailedSummary = new Set<string>();
 
+// Same idea, but for study-guide generation. Per-notebook (not per-section).
+const generatingStudyGuide = new Set<string>();
+
 const DETAILED_SUMMARY_MODEL = "gpt-4o";
+const STUDY_GUIDE_MODEL = "gpt-4o";
 
 function formatSubpageTitle(d: Date): string {
   // e.g. "Detailed Summary — Apr 21 11:47 AM"
@@ -227,6 +239,430 @@ ${
   }
 }
 
+// ============================================================================
+// PHASE 2: Study Guide generation
+// ----------------------------------------------------------------------------
+// Mirrors the Detailed Summary pipeline:
+// - Versioned (rows are never overwritten on full regenerate; new row created)
+// - Pushed to a dedicated subpage under the notebook's Notion page
+// - Block IDs are tracked in `study_guide_block_mappings` (NOT in
+//   `notion_block_mappings`) so per-section regenerate can locate exactly
+//   the blocks it needs to delete and re-append.
+// - Uses [needs review] placeholders rather than hallucinating; this is a
+//   prompt requirement, enforced by the model.
+// - Failures NEVER touch live-sync state (no enqueueSync, no backfill).
+// ============================================================================
+
+const SECTION_HEADINGS: Record<StudyGuideSectionName, string> = {
+  topics: "Topics",
+  keyConcepts: "Key Concepts",
+  definitions: "Definitions",
+  workedExamples: "Worked Examples",
+  practiceQuestions: "Practice Questions",
+  flaggedGaps: "Flagged Gaps",
+};
+
+function emptySections(): StudyGuideSections {
+  return {
+    topics: "",
+    keyConcepts: "",
+    definitions: "",
+    workedExamples: "",
+    practiceQuestions: "",
+    flaggedGaps: "",
+  };
+}
+
+function parseSections(json: string): StudyGuideSections {
+  try {
+    const parsed = JSON.parse(json) as Partial<StudyGuideSections>;
+    const out = emptySections();
+    for (const name of STUDY_GUIDE_SECTION_NAMES) {
+      if (typeof parsed[name] === "string") out[name] = parsed[name] as string;
+    }
+    return out;
+  } catch {
+    return emptySections();
+  }
+}
+
+function parseSectionVersions(
+  json: string
+): Record<StudyGuideSectionName, number> {
+  try {
+    const parsed = JSON.parse(json) as Partial<
+      Record<StudyGuideSectionName, number>
+    >;
+    const out: Record<StudyGuideSectionName, number> = {
+      topics: 1,
+      keyConcepts: 1,
+      definitions: 1,
+      workedExamples: 1,
+      practiceQuestions: 1,
+      flaggedGaps: 1,
+    };
+    for (const name of STUDY_GUIDE_SECTION_NAMES) {
+      if (typeof parsed[name] === "number") out[name] = parsed[name] as number;
+    }
+    return out;
+  } catch {
+    return {
+      topics: 1,
+      keyConcepts: 1,
+      definitions: 1,
+      workedExamples: 1,
+      practiceQuestions: 1,
+      flaggedGaps: 1,
+    };
+  }
+}
+
+function studyGuideSubpageTitle(d: Date): string {
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = d.getDate();
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `Study Guide — ${month} ${day} ${time}`;
+}
+
+// Build the markdown for a single section block (heading + body or
+// placeholder).
+function sectionMarkdown(name: StudyGuideSectionName, body: string): string {
+  const trimmed = body.trim();
+  const content = trimmed.length > 0 ? trimmed : "_[needs review] No content yet for this section._";
+  return `## ${SECTION_HEADINGS[name]}\n\n${content}`;
+}
+
+const STUDY_GUIDE_PROMPT_PREAMBLE = `You are producing an EXAM-READY study guide from a student's notebook.
+
+ABSOLUTE RULE: If the source material does not clearly support a fact, definition, formula, example, or answer, you MUST emit the literal placeholder \`[needs review]\` instead of guessing. Do not invent content. Do not extrapolate. Hallucination is the worst possible failure here.
+
+Output JSON with EXACTLY these six string fields, each containing markdown:
+
+- "topics": A bulleted list of the major topics covered, ordered as they appeared. One-line each.
+- "keyConcepts": The core ideas, principles, and rules — bulleted with brief explanations. Use **bold** for the concept name.
+- "definitions": Glossary-style. Each entry as "**Term** — definition." Bullet list.
+- "workedExamples": Step-by-step worked examples, with reasoning. Use fenced code blocks for code/math derivations and \`$...$\` / \`$$...$$\` for inline / block math. If no example was clearly worked in the source, emit "[needs review]".
+- "practiceQuestions": A numbered list of practice questions covering the material. After each question, on a new line, include "_Answer:_ ..." with the answer. If you cannot derive a confident answer from the source, write "_Answer:_ [needs review]".
+- "flaggedGaps": A bulleted list of topics that appear thin or unresolved in the source — places the student should follow up. If nothing is unclear, output "_All material covered appears complete._"
+
+Return STRICT JSON. No commentary, no markdown fences around the JSON.`;
+
+async function callStudyGuideModel(
+  corpus: string,
+  priorContext: string,
+  onlySection?: StudyGuideSectionName
+): Promise<{ sections: StudyGuideSections; tokenCount: number }> {
+  const OpenAI = (await import("openai")).default;
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const sectionConstraint = onlySection
+    ? `\n\nIMPORTANT: For this run, only the "${onlySection}" field will be used. You may still output the other fields (any string is fine; an empty string is acceptable), but invest your effort in "${onlySection}".`
+    : "";
+
+  const prompt = `${STUDY_GUIDE_PROMPT_PREAMBLE}${sectionConstraint}\n\n${
+    priorContext
+      ? `Prior study guides for this notebook (for continuity only — do not just repeat them):\n\n${priorContext}\n\n---\n\n`
+      : ""
+  }Captured session material (chronological):\n\n${corpus}`;
+
+  const response = await openai.chat.completions.create({
+    model: STUDY_GUIDE_MODEL,
+    messages: [{ role: "user", content: prompt }],
+    response_format: { type: "json_object" },
+    max_tokens: 4096,
+  });
+  const content = response.choices[0]?.message?.content?.trim() ?? "";
+  const tokenCount = response.usage?.total_tokens ?? 0;
+  return { sections: parseSections(content), tokenCount };
+}
+
+// Push all six sections to a freshly created subpage. Returns the per-section
+// block IDs so we can later regenerate just one section in place.
+async function pushStudyGuideToNewSubpage(
+  parentNotionPageId: string,
+  sections: StudyGuideSections,
+  createdAt: Date
+): Promise<{
+  pageId: string;
+  url: string;
+  sectionBlockIds: Record<StudyGuideSectionName, string[]>;
+  topAnchorBlockId: string;
+}> {
+  // Create the subpage *empty*, then append a stable placeholder block via
+  // `appendBlocksAfter` so we can capture its ID. That ID becomes our
+  // permanent "top anchor" — used as the `after` cursor whenever the first
+  // section is regenerated, so the new blocks land in the original position
+  // (Notion's children API appends to the end if `after` is omitted, which
+  // would otherwise push regenerated section 0 to the bottom).
+  const sub = await createNotionSubpage(
+    parentNotionPageId,
+    studyGuideSubpageTitle(createdAt),
+    []
+  );
+
+  const [topAnchorBlockId] = await appendBlocksAfter(
+    sub.pageId,
+    null,
+    markdownToNotionBlocks(
+      "_Generated study guide. Sections follow below._"
+    )
+  );
+
+  // Append each section in order, recording block IDs per section. We chain
+  // every append after the most recent section's last block (or the top
+  // anchor for the first section) so ordering is deterministic.
+  const sectionBlockIds = {
+    topics: [],
+    keyConcepts: [],
+    definitions: [],
+    workedExamples: [],
+    practiceQuestions: [],
+    flaggedGaps: [],
+  } as Record<StudyGuideSectionName, string[]>;
+
+  let cursor: string = topAnchorBlockId;
+  for (const name of STUDY_GUIDE_SECTION_NAMES) {
+    const blocks = markdownToNotionBlocks(sectionMarkdown(name, sections[name]));
+    const ids = await appendBlocksAfter(sub.pageId, cursor, blocks);
+    sectionBlockIds[name] = ids;
+    if (ids.length > 0) cursor = ids[ids.length - 1];
+  }
+
+  return {
+    pageId: sub.pageId,
+    url: sub.url,
+    sectionBlockIds,
+    topAnchorBlockId,
+  };
+}
+
+async function generateStudyGuide(
+  notebookId: string,
+  inSessionSummaries: InSessionSummaryInput[] = []
+): Promise<
+  | { ok: true; studyGuide: StudyGuide }
+  | { ok: false; reason: string; status: number }
+> {
+  if (generatingStudyGuide.has(notebookId)) {
+    return {
+      ok: false,
+      reason: "A study guide is already being generated for this notebook.",
+      status: 409,
+    };
+  }
+  generatingStudyGuide.add(notebookId);
+  try {
+    const notebook = await storage.getNotebook(notebookId);
+    if (!notebook) return { ok: false, reason: "Notebook not found", status: 404 };
+    if (!notebook.notionPageId) {
+      return {
+        ok: false,
+        reason: "Notebook has no synced Notion page yet. Use Send to Notion first.",
+        status: 400,
+      };
+    }
+
+    const corpus = await buildDetailedSummaryCorpus(notebookId, inSessionSummaries);
+    if (corpus.trim().length === 0) {
+      return {
+        ok: false,
+        reason: "Notebook has no captured content yet — nothing to build a study guide from.",
+        status: 400,
+      };
+    }
+
+    const prior = await storage.getStudyGuidesByNotebook(notebookId);
+    const priorContext = prior
+      .slice(0, 2)
+      .map((g) => {
+        const secs = parseSections(g.sections);
+        return `[Prior study guide from ${new Date(g.createdAt).toLocaleString()}]\nTopics: ${secs.topics}\nKey Concepts: ${secs.keyConcepts}`;
+      })
+      .join("\n\n---\n\n");
+
+    const { sections, tokenCount } = await callStudyGuideModel(corpus, priorContext);
+
+    const initialVersions: Record<StudyGuideSectionName, number> = {
+      topics: 1,
+      keyConcepts: 1,
+      definitions: 1,
+      workedExamples: 1,
+      practiceQuestions: 1,
+      flaggedGaps: 1,
+    };
+
+    const row = await storage.createStudyGuide({
+      id: randomUUID(),
+      notebookId,
+      sections: JSON.stringify(sections),
+      sectionVersions: JSON.stringify(initialVersions),
+      model: STUDY_GUIDE_MODEL,
+      tokenCount,
+    });
+
+    try {
+      const pushed = await pushStudyGuideToNewSubpage(
+        notebook.notionPageId,
+        sections,
+        new Date(row.createdAt)
+      );
+      const updated = (await storage.setStudyGuideSubpage(
+        row.id,
+        pushed.pageId,
+        pushed.url,
+        pushed.topAnchorBlockId
+      )) ?? row;
+      // Record per-section block IDs in the Phase-2 mapping table.
+      for (const name of STUDY_GUIDE_SECTION_NAMES) {
+        await storage.recordStudyGuideSectionBlocks(
+          row.id,
+          name,
+          pushed.sectionBlockIds[name]
+        );
+      }
+      return { ok: true, studyGuide: updated };
+    } catch (e) {
+      if (e instanceof NotionNotFoundError) {
+        // Parent page was deleted in Notion. Per Phase-2 isolation we do NOT
+        // touch live-sync state. Leave the row's subpage null so the next
+        // generation creates a fresh subpage once live-sync recovers.
+        console.warn(
+          `Study-guide subpage push hit 404 for notebook ${notebookId}; leaving live-sync state untouched.`
+        );
+        const cleared = await storage.setStudyGuideSubpage(row.id, null, null);
+        await storage.clearStudyGuideBlockMappings(row.id);
+        return { ok: true, studyGuide: cleared ?? row };
+      }
+      console.error("Study-guide Notion push failed:", e);
+      return { ok: true, studyGuide: row };
+    }
+  } finally {
+    generatingStudyGuide.delete(notebookId);
+  }
+}
+
+// Per-section regenerate. Mutates the existing row's section content +
+// version, deletes that section's existing Notion blocks, and re-appends new
+// ones immediately after the prior section's last block (so ordering is
+// preserved on the subpage).
+async function regenerateStudyGuideSection(
+  studyGuideId: string,
+  section: StudyGuideSectionName
+): Promise<
+  | { ok: true; studyGuide: StudyGuide }
+  | { ok: false; reason: string; status: number }
+> {
+  const guide = await storage.getStudyGuide(studyGuideId);
+  if (!guide) return { ok: false, reason: "Study guide not found", status: 404 };
+  if (generatingStudyGuide.has(guide.notebookId)) {
+    return {
+      ok: false,
+      reason: "A study guide operation is already in progress for this notebook.",
+      status: 409,
+    };
+  }
+  generatingStudyGuide.add(guide.notebookId);
+  try {
+    const notebook = await storage.getNotebook(guide.notebookId);
+    if (!notebook) return { ok: false, reason: "Notebook not found", status: 404 };
+
+    const corpus = await buildDetailedSummaryCorpus(guide.notebookId, []);
+    if (corpus.trim().length === 0) {
+      return {
+        ok: false,
+        reason: "Notebook has no captured content to regenerate from.",
+        status: 400,
+      };
+    }
+
+    // Provide the existing section's content as continuity context. The
+    // model is still bound by the [needs review] rule.
+    const existingSections = parseSections(guide.sections);
+    const priorContext = `Existing section "${SECTION_HEADINGS[section]}":\n${existingSections[section] || "(empty)"}`;
+
+    const { sections: newSections, tokenCount } = await callStudyGuideModel(
+      corpus,
+      priorContext,
+      section
+    );
+
+    const merged = { ...existingSections, [section]: newSections[section] };
+    const versions = parseSectionVersions(guide.sectionVersions);
+    versions[section] = (versions[section] ?? 1) + 1;
+
+    const updated = await storage.updateStudyGuideSection(
+      guide.id,
+      section,
+      JSON.stringify(merged),
+      JSON.stringify(versions),
+      guide.tokenCount + tokenCount
+    );
+
+    // Now patch the subpage in place — delete old blocks for this section,
+    // append new ones after the previous section's last block.
+    if (guide.notionSubpageId) {
+      try {
+        const oldIds = await storage.getStudyGuideSectionBlocks(guide.id, section);
+        for (const id of oldIds) {
+          try {
+            await deleteNotionBlock(id);
+          } catch (err) {
+            // Block may already be gone; tolerate that and continue.
+            console.warn(`Failed to delete study-guide block ${id}:`, err);
+          }
+        }
+
+        // Find the anchor: last block of the previous section in display
+        // order. If this is the first section (or all preceding sections
+        // are empty), fall back to the subpage's stable top anchor block so
+        // the new blocks are inserted *immediately after* the placeholder
+        // header — preserving the section's original position. If no anchor
+        // exists at all (legacy rows), we have to append at the end (this
+        // is rare and only affects pre-existing study guides).
+        const sectionIdx = STUDY_GUIDE_SECTION_NAMES.indexOf(section);
+        let anchor: string | null = guide.topAnchorBlockId ?? null;
+        for (let i = sectionIdx - 1; i >= 0; i--) {
+          const prev = STUDY_GUIDE_SECTION_NAMES[i];
+          const prevIds = await storage.getStudyGuideSectionBlocks(guide.id, prev);
+          if (prevIds.length > 0) {
+            anchor = prevIds[prevIds.length - 1];
+            break;
+          }
+        }
+
+        const newBlocks = markdownToNotionBlocks(
+          sectionMarkdown(section, merged[section])
+        );
+        const newIds = await appendBlocksAfter(
+          guide.notionSubpageId,
+          anchor,
+          newBlocks
+        );
+        await storage.recordStudyGuideSectionBlocks(guide.id, section, newIds);
+      } catch (e) {
+        if (e instanceof NotionNotFoundError) {
+          // Subpage gone. Drop our reference; UI will offer a full regenerate.
+          console.warn(
+            `Study-guide section regenerate hit 404 for guide ${guide.id}; clearing subpage reference.`
+          );
+          await storage.setStudyGuideSubpage(guide.id, null, null);
+          await storage.clearStudyGuideBlockMappings(guide.id);
+        } else {
+          console.error("Study-guide section regenerate Notion push failed:", e);
+        }
+      }
+    }
+
+    const finalRow = (await storage.getStudyGuide(guide.id)) ?? updated ?? guide;
+    return { ok: true, studyGuide: finalRow };
+  } finally {
+    generatingStudyGuide.delete(guide.notebookId);
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   const objectStorageService = new ObjectStorageService();
   const transcriptionService = new TranscriptionService();
@@ -304,6 +740,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notionSyncPending: getSyncQueueLength(notebook.id),
         notionBackfilling: isBackfilling(notebook.id),
         detailedSummaryGenerating: generatingDetailedSummary.has(notebook.id),
+        studyGuideGenerating: generatingStudyGuide.has(notebook.id),
       });
     } catch (error) {
       console.error("Error fetching notebook:", error);
@@ -314,13 +751,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update notebook
   app.patch("/api/notebooks/:id", async (req, res) => {
     try {
-      const { title, className, notionSyncEnabled, sessionEnded, autoDetailedSummaryOnEnd } = req.body;
+      const { title, className, notionSyncEnabled, sessionEnded, autoDetailedSummaryOnEnd, autoStudyGuideOnEnd } = req.body;
       if (
         !title &&
         className === undefined &&
         notionSyncEnabled === undefined &&
         sessionEnded === undefined &&
-        autoDetailedSummaryOnEnd === undefined
+        autoDetailedSummaryOnEnd === undefined &&
+        autoStudyGuideOnEnd === undefined
       ) {
         return res.status(400).json({ error: "No fields to update" });
       }
@@ -336,6 +774,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ) {
         return res.status(400).json({ error: "autoDetailedSummaryOnEnd must be a boolean" });
       }
+      if (
+        autoStudyGuideOnEnd !== undefined &&
+        typeof autoStudyGuideOnEnd !== "boolean"
+      ) {
+        return res.status(400).json({ error: "autoStudyGuideOnEnd must be a boolean" });
+      }
       const before = await storage.getNotebook(req.params.id);
       const updated = await storage.updateNotebook(req.params.id, {
         title,
@@ -343,6 +787,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notionSyncEnabled,
         sessionEnded,
         autoDetailedSummaryOnEnd,
+        autoStudyGuideOnEnd,
       });
       if (!updated) {
         return res.status(404).json({ error: "Notebook not found" });
@@ -370,6 +815,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           generateDetailedSummary(updated.id, []).catch((err) => {
             console.error(
               `Auto detailed-summary on session end failed for ${updated.id}:`,
+              err
+            );
+          });
+        });
+      }
+      // Same auto-trigger pattern for study guides. Independent toggle so
+      // the user can opt into one, both, or neither.
+      if (
+        before &&
+        !before.sessionEnded &&
+        updated.sessionEnded &&
+        updated.autoStudyGuideOnEnd
+      ) {
+        setImmediate(() => {
+          generateStudyGuide(updated.id, []).catch((err) => {
+            console.error(
+              `Auto study-guide on session end failed for ${updated.id}:`,
               err
             );
           });
@@ -907,6 +1369,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error listing detailed summaries:", error);
       res.status(500).json({ error: "Failed to list detailed summaries" });
+    }
+  });
+
+  // ============ STUDY GUIDE ROUTES (Phase 2) ============
+
+  // Generate a new study guide (creates a new versioned row + Notion subpage).
+  app.post("/api/notebooks/:id/study-guides", async (req, res) => {
+    try {
+      const raw: unknown = req.body?.inSessionSummaries;
+      const inSession: InSessionSummaryInput[] = Array.isArray(raw)
+        ? raw.flatMap((entry): InSessionSummaryInput[] => {
+            if (
+              entry &&
+              typeof entry === "object" &&
+              "text" in entry &&
+              typeof (entry as { text: unknown }).text === "string"
+            ) {
+              const text = (entry as { text: string }).text;
+              if (text.trim().length === 0) return [];
+              const ts = (entry as { timestamp?: unknown }).timestamp;
+              const timestamp =
+                typeof ts === "string" || ts instanceof Date ? ts : new Date();
+              return [{ text, timestamp }];
+            }
+            return [];
+          })
+        : [];
+      const result = await generateStudyGuide(req.params.id, inSession);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.reason });
+      }
+      res.json(result.studyGuide);
+    } catch (error) {
+      console.error("Error generating study guide:", error);
+      res.status(500).json({ error: "Failed to generate study guide" });
+    }
+  });
+
+  // List study guides for a notebook (newest first).
+  app.get("/api/notebooks/:id/study-guides", async (req, res) => {
+    try {
+      const guides = await storage.getStudyGuidesByNotebook(req.params.id);
+      res.json(guides);
+    } catch (error) {
+      console.error("Error listing study guides:", error);
+      res.status(500).json({ error: "Failed to list study guides" });
+    }
+  });
+
+  // Per-section regenerate. Updates this section in place on the existing
+  // subpage (delete + re-append at original ordinal position).
+  app.post("/api/study-guides/:id/sections/:section/regenerate", async (req, res) => {
+    try {
+      const section = req.params.section as StudyGuideSectionName;
+      if (!STUDY_GUIDE_SECTION_NAMES.includes(section)) {
+        return res.status(400).json({ error: "Invalid section name" });
+      }
+      const result = await regenerateStudyGuideSection(req.params.id, section);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.reason });
+      }
+      res.json(result.studyGuide);
+    } catch (error) {
+      console.error("Error regenerating study-guide section:", error);
+      res.status(500).json({ error: "Failed to regenerate section" });
+    }
+  });
+
+  // Update reviewed-items list. UI-only state; never pushed to Notion (so
+  // Notion doesn't drift away from the originally generated content).
+  app.patch("/api/study-guides/:id/reviewed", async (req, res) => {
+    try {
+      const items = req.body?.reviewedItems;
+      if (!Array.isArray(items) || !items.every((s) => typeof s === "string")) {
+        return res.status(400).json({ error: "reviewedItems must be string[]" });
+      }
+      const updated = await storage.setStudyGuideReviewedItems(req.params.id, items);
+      if (!updated) return res.status(404).json({ error: "Study guide not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating reviewed items:", error);
+      res.status(500).json({ error: "Failed to update reviewed items" });
     }
   });
 
